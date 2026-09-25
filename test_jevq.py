@@ -115,7 +115,14 @@ class JevqTests(unittest.TestCase):
 
     def test_choice_plain_output_and_request(self):
         status, output, error, opener = self.run_main(
-            ["-c", "--choices", " Heaven, Hell ", "-q", "Destination?", "Frank", "Sinatra"],
+            [
+                "-c",
+                "Heaven,Hell",
+                "-q",
+                "Where does this one belong?",
+                "Frank",
+                "Sinatra",
+            ],
             response=choice_response(),
             fail_read=True,
         )
@@ -132,7 +139,7 @@ class JevqTests(unittest.TestCase):
             payload["questions"]["question"],
             {
                 "type": "choice",
-                "instructions": "Destination?",
+                "instructions": "Where does this one belong?",
                 "criteria": {"Heaven": None, "Hell": None},
             },
         )
@@ -161,7 +168,7 @@ class JevqTests(unittest.TestCase):
 
     def test_choice_json_output_contains_probabilities_and_confidence(self):
         status, output, error, _ = self.run_main(
-            ["-c", "--choices", "Heaven,Hell", "-j", "-q", "Destination?", "person"],
+            ["--choices", "Heaven,Hell", "-j", "-q", "Destination?", "person"],
             response=choice_response(),
         )
         self.assertEqual(status, 0)
@@ -206,12 +213,10 @@ class JevqTests(unittest.TestCase):
 
     def test_mode_specific_option_rules(self):
         cases = [
-            (["-c", "-q", "Q", "state"], "requires --choices"),
+            (["-c", "-q", "Q", "state"], "expected one argument"),
             (["-s", "-q", "Q", "state"], "requires --criteria"),
-            (["-p", "--choices", "a,b", "-q", "Q", "state"], "only in choice"),
             (["-p", "--criteria", "a,b", "-q", "Q", "state"], "only in score"),
-            (["-c", "--choices", "a,b", "--criteria", "x,y", "-q", "Q", "state"], "only in score"),
-            (["-s", "--criteria", "a,b", "--choices", "x,y", "-q", "Q", "state"], "only in choice"),
+            (["-c", "a,b", "--criteria", "x,y", "-q", "Q", "state"], "only in score"),
         ]
         for args, fragment in cases:
             with self.subTest(args=args):
@@ -224,7 +229,7 @@ class JevqTests(unittest.TestCase):
         for value in values:
             with self.subTest(value=value):
                 status, output, error, _ = self.run_main(
-                    ["-c", "--choices", value, "-q", "Q", "state"]
+                    ["-c", value, "-q", "Q", "state"]
                 )
                 self.assertEqual((status, output != "", error != ""), (2, False, True))
 
@@ -375,7 +380,7 @@ class JevqTests(unittest.TestCase):
                 document = choice_response()
                 document["answers"]["question"].update(mutation)
                 status, _, error, _ = self.run_main(
-                    ["-c", "--choices", "Heaven,Hell", "-j", "-q", "Q", "state"],
+                    ["-c", "Heaven,Hell", "-j", "-q", "Q", "state"],
                     response=document,
                 )
                 self.assertEqual(status, 6)

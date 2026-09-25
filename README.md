@@ -5,7 +5,7 @@
 It requires Python 3.10 or newer and a `TYPESAFE_API_KEY` environment variable. The initial implementation uses only the Python standard library.
 
 ```shell
-python3 jevq.py -c --choices Heaven,Hell -q "Where should this one go?" Frank Sinatra
+python3 jevq.py -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
 python3 jevq.py -p -q "Does this ask for a refund?" < message.txt
 python3 jevq.py -s --criteria calm,annoyed,hostile -q "What is the user's hostility level?" < message.txt
 ```

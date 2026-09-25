@@ -46,7 +46,7 @@ Planned functions and responsibilities:
 | --- | --- |
 | `detect_json_mode(argv)` | Detect exact `-j`/`--json` flags before full parsing so parser failures use the requested format. |
 | `make_parser()` | Define modes and arguments with `argparse`; override parser error handling so it never writes uncontrolled diagnostics. |
-| `parse_cli(argv)` | Parse arguments and enforce cross-option rules such as mode-specific `--choices` and `--criteria`. |
+| `parse_cli(argv)` | Parse arguments and enforce cross-option rules such as the choice list consumed by `-c`/`--choices` and score-specific `--criteria`. |
 | `parse_labels(value, option_name)` | Split, trim, and validate choices or score criteria while preserving order. |
 | `read_state(text_parts, stdin)` | Apply positional-over-stdin precedence without accidentally blocking on a terminal. |
 | `load_api_key(environ)` | Validate `TYPESAFE_API_KEY` without exposing its value. |
@@ -63,14 +63,14 @@ Use a small internal exception or immutable error value carrying `code`, `messag
 
 ## 3. CLI validation design
 
-Use one required mutually exclusive group for `-c`/`--choice`, `-p`/`--probability`, `-n`/`--noul`, and `-s`/`--score`. Both noul aliases set the same internal mode, while the group rejects supplying both aliases.
+Use one required mutually exclusive group for `-c`/`--choices`, `-p`/`--probability`, `-n`/`--noul`, and `-s`/`--score`. The choice option consumes its comma-separated list directly. Both noul aliases set the same internal mode, while the group rejects supplying both aliases.
 
 After parsing:
 
 1. reject blank question or model values;
-2. in choice mode, require `--choices` and reject `--criteria`;
-3. in score mode, require `--criteria` and reject `--choices`;
-4. in noul mode, reject both mode-specific options;
+2. in choice mode, validate the list consumed by `-c`/`--choices` and reject `--criteria`;
+3. in score mode, require `--criteria`;
+4. in noul mode, reject `--criteria`;
 5. validate label cardinality, duplicates, empty items, and ASCII control characters; and
 6. obtain non-blank state from positional text or non-interactive stdin.
 
@@ -130,7 +130,7 @@ Use `unittest`, `unittest.mock`, `io.StringIO`, and small fake response/opener o
 - each mode and long/short alias;
 - mutually exclusive mode failures, including `-p` plus `-n`;
 - missing and blank question/model values;
-- required/forbidden `--choices` and `--criteria` combinations;
+- required choice operands and required/forbidden `--criteria` combinations;
 - trimming, duplicate, empty, one-item, control-character, and order cases; and
 - text beginning with `-` after `--`.
 

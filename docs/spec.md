@@ -56,7 +56,7 @@ The API reference used to plan implementation is the [official TypeSafe OpenAPI 
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c | -p | -n | -s) -q QUESTION [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -65,7 +65,7 @@ Exactly one mode is required:
 
 | Short option | Long option | Meaning |
 | --- | --- | --- |
-| `-c` | `--choice` | Choice question |
+| `-c CHOICES` | `--choices CHOICES` | Choice question using a comma-separated option list |
 | `-p` | `--probability` | Noul question |
 | `-n` | `--noul` | Exact synonym for `--probability` |
 | `-s` | `--score` | Score question |
@@ -85,7 +85,7 @@ Exactly one mode is required:
 
 ### 3.3 Choice arguments
 
-Choice mode requires `--choices CHOICE[,CHOICE...]`.
+Choice mode is selected with `-c CHOICE[,CHOICE...]` or its long form, `--choices CHOICE[,CHOICE...]`. The choice list is the argument to the mode option itself; no additional flag is required.
 
 - Split the value on literal commas.
 - Trim surrounding whitespace from each item.
@@ -93,12 +93,11 @@ Choice mode requires `--choices CHOICE[,CHOICE...]`.
 - Require at least two choices.
 - Reject carriage returns, line feeds, and other ASCII control characters in choice names so plain-text output remains one result per line.
 - Commas inside choice names and per-choice descriptions are not supported in this version.
-- `--choices` is invalid outside choice mode.
 
 Example:
 
 ```shell
-jevq -c --choices Heaven,Hell -q "Where should this one go?" Frank Sinatra
+jevq -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
 ```
 
 ### 3.4 Score arguments
@@ -260,7 +259,7 @@ Live API tests, if added, must be opt-in and skipped when credentials are unavai
 
 No product decision currently blocks implementation planning. Review comments resolved the earlier blockers as follows:
 
-1. **Score rubric syntax:** use the required comma-separated `--criteria` argument described in section 3.4.
+1. **Choice and score syntax:** pass the comma-separated choice list directly to `-c`/`--choices`; use the required comma-separated `--criteria` argument for score mode as described in sections 3.3 and 3.4.
 2. **Model selection:** use `-m`/`--model`, defaulting to `jev-latest`.
 3. **Output compatibility:** default to bare plain-text results and plain-text errors; use `-j`/`--json` for the reduced JSON results and structured JSON errors.
 4. **Initial reliability policy:** use one 30-second request timeout with no automatic retries.

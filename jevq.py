@@ -92,7 +92,13 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
         output=output,
     )
     modes = parser.add_mutually_exclusive_group(required=True)
-    modes.add_argument("-c", "--choice", dest="mode", action="store_const", const="choice")
+    modes.add_argument(
+        "-c",
+        "--choices",
+        dest="choices",
+        metavar="CHOICE[,CHOICE...]",
+        help="ask a choice question using comma-separated choices",
+    )
     modes.add_argument(
         "-p", "--probability", dest="mode", action="store_const", const="noul"
     )
@@ -102,7 +108,6 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
     parser.add_argument("-q", "--question", required=True, help="question instructions")
     parser.add_argument("-m", "--model", default=DEFAULT_MODEL, help="TypeSafe model name")
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON output")
-    parser.add_argument("--choices", help="comma-separated choices for choice mode")
     parser.add_argument("--criteria", help="comma-separated ordered levels for score mode")
     parser.add_argument("text", nargs="*", metavar="TEXT", help="state text")
     return parser
@@ -142,32 +147,28 @@ def parse_labels(value: str, option_name: str) -> tuple[str, ...]:
 def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
     args = make_parser(output).parse_args(list(argv))
 
+    mode = "choice" if args.choices is not None else args.mode
+
     if not args.question.strip():
         raise JevqError("invalid_input", "question must not be blank", 2)
     if not args.model.strip():
         raise JevqError("invalid_input", "model must not be blank", 2)
 
     labels: tuple[str, ...] = ()
-    if args.mode == "choice":
-        if args.choices is None:
-            raise JevqError("usage_error", "choice mode requires --choices", 2)
+    if mode == "choice":
         if args.criteria is not None:
             raise JevqError("usage_error", "--criteria is valid only in score mode", 2)
         labels = parse_labels(args.choices, "--choices")
-    elif args.mode == "score":
+    elif mode == "score":
         if args.criteria is None:
             raise JevqError("usage_error", "score mode requires --criteria", 2)
-        if args.choices is not None:
-            raise JevqError("usage_error", "--choices is valid only in choice mode", 2)
         labels = parse_labels(args.criteria, "--criteria")
     else:
-        if args.choices is not None:
-            raise JevqError("usage_error", "--choices is valid only in choice mode", 2)
         if args.criteria is not None:
             raise JevqError("usage_error", "--criteria is valid only in score mode", 2)
 
     return CliConfig(
-        mode=args.mode,
+        mode=mode,
         question=args.question,
         model=args.model,
         json_mode=args.json,
