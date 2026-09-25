@@ -210,6 +210,7 @@ Exit statuses:
 | Status | Meaning | Example codes |
 | --- | --- | --- |
 | 0 | success | — |
+| 1 | unexpected internal failure | `internal_error` |
 | 2 | invalid CLI usage or input | `usage_error`, `invalid_input` |
 | 3 | missing or invalid local configuration | `configuration_error` |
 | 4 | network, timeout, TLS, or DNS failure | `network_error`, `timeout` |
