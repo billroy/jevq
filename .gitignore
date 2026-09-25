@@ -1,0 +1,4 @@
+.bullpen
+__pycache__/
+*.py[cod]
+.coverage
