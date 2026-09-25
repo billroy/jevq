@@ -12,6 +12,20 @@ python3 jevq.py -s --criteria calm,annoyed,hostile -q "What is the user's hostil
 
 Output is the selected choice, probability, or score as plain text. Pass `-j` or `--json` for JSON success and error output, and `-m` or `--model` to override the default `jev-latest` model.
 
+## Simple install
+
+For a single-user or system-local install, copy the script onto your `PATH` and make it executable in one step:
+
+```shell
+install -m 755 jevq.py /usr/local/bin/jevq
+```
+
+Use a different destination if your local tools directory is elsewhere, for example `~/.local/bin/jevq`. After installing, run `jevq` directly:
+
+```shell
+jevq -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
+```
+
 ## Return codes
 
 `jevq` exits with `0` when it prints a successful answer. On failure, it writes the error to standard error and exits with one of these nonzero statuses:
