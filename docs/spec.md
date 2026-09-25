@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-`jevq` is a small Python command-line client for the TypeSafe Jev System One API. It submits one item of input state and one typed question, then writes the relevant typed answer as JSON.
+`jevq` is a small Python command-line client for the TypeSafe Jev System One API. It submits one item of input state and one typed question, then writes the relevant typed answer as plain text or, when requested, JSON.
 
-The executable is implemented in `jevq.py`. Packaging or installation must expose it as the `jevq` command; invoking `python3 jevq.py ...` must also work.
+The implementation lives in `jevq.py`, and invoking `python3 jevq.py ...` must work. Examples use `jevq` as the intended installed command name; the installation mechanism is deferred until after initial testing.
 
 This version supports exactly one question per invocation and one of Jev's three question types:
 
@@ -21,7 +21,7 @@ Use the TypeSafe API described by its OpenAPI document:
 - endpoint: `POST https://api.typesafe.ai/v1/systemone`
 - authentication: `Authorization: Bearer <TYPESAFE_API_KEY>`
 - content type: `application/json`
-- default model: `jev-latest` (subject to the blocking decision in section 10)
+- model: the value of `--model`, which defaults to `jev-latest`
 - question ID: `question`
 
 The request body has this common shape:
@@ -56,7 +56,7 @@ The API reference used to plan implementation is the [official TypeSafe OpenAPI 
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c | -p | -n | -s) -q QUESTION [mode options] [TEXT ...]
+usage: jevq (-c | -p | -n | -s) -q QUESTION [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -77,9 +77,11 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
+| `-m MODEL`, `--model MODEL` | no | TypeSafe model name or alias; defaults to `jev-latest` |
+| `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
 
-`QUESTION` and the resulting state must each contain at least one non-whitespace character.
+`QUESTION`, `MODEL`, and the resulting state must each contain at least one non-whitespace character. The model value is passed through unchanged; the API remains authoritative about which model names the authenticated account may use.
 
 ### 3.3 Choice arguments
 
@@ -89,6 +91,7 @@ Choice mode requires `--choices CHOICE[,CHOICE...]`.
 - Trim surrounding whitespace from each item.
 - Reject empty items and duplicate items after trimming.
 - Require at least two choices.
+- Reject carriage returns, line feeds, and other ASCII control characters in choice names so plain-text output remains one result per line.
 - Commas inside choice names and per-choice descriptions are not supported in this version.
 - `--choices` is invalid outside choice mode.
 
@@ -100,7 +103,7 @@ jevq -c --choices Heaven,Hell -q "Where should this one go?" Frank Sinatra
 
 ### 3.4 Score arguments
 
-The TypeSafe API requires score criteria, so score mode requires a proposed new argument: `--criteria LEVEL[,LEVEL...]`.
+The TypeSafe API requires score criteria, so score mode requires `--criteria LEVEL[,LEVEL...]`.
 
 - Split and validate it using the same rules as `--choices`.
 - Preserve its order; the first item is score 0, the second is score 1, and so on.
@@ -112,8 +115,6 @@ Example:
 ```shell
 jevq -s --criteria calm,annoyed,hostile -q "What is the user's hostility level?" < message.txt
 ```
-
-The name and syntax of this argument remain a blocking product decision (section 10); they are specified here as the recommended resolution so implementation can be estimated.
 
 ## 4. State input
 
@@ -140,13 +141,27 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 
 The first version has no command-line API-key option. This avoids leaking credentials through shell history and process listings.
 
-The default endpoint and model are not user-configurable in the initial interface unless section 10 resolves otherwise.
+The endpoint is not user-configurable in the initial interface. The model is selected with `--model` and defaults to `jev-latest`.
 
 ## 6. Output contract
 
-Write exactly one compact JSON value followed by a newline to standard output on success. Do not write progress, labels, Markdown, or diagnostic text to standard output.
+Write exactly one result followed by a newline to standard output on success. Do not write progress, labels, Markdown, or diagnostic text to standard output.
 
-Recommended success shapes are:
+### 6.1 Default plain-text mode
+
+Without `-j`/`--json`, print the barest useful result:
+
+| Mode | Output | Example |
+| --- | --- | --- |
+| choice | selected choice string | `Heaven` |
+| noul / probability | decimal probability from 0 to 1 | `0.93` |
+| score | decimal score | `1.7` |
+
+Numbers must use Python's normal JSON-compatible decimal representation and must not be rounded or converted to a percentage. A choice is printed verbatim, even if it contains whitespace.
+
+### 6.2 JSON mode
+
+With `-j`/`--json`, write one compact JSON object:
 
 **Choice**
 
@@ -168,23 +183,27 @@ Recommended success shapes are:
 
 Choice output copies `choice`, `probabilities`, and `confidence` from the API answer. Noul output copies only `noul`. Score output copies only `score`. Do not round numeric values or substitute percentages from 0 to 100: the API's `noul` is a probability from 0 to 1.
 
-Field names and reduced output versus the complete typed API answer remain a blocking compatibility decision in section 10. The shapes above reconcile the original phrase “relevant portion” with the current API response.
-
 ## 7. Errors and exit status
 
 All errors must:
 
 - produce no standard output;
-- write exactly one compact JSON object followed by a newline to standard error; and
+- write exactly one diagnostic followed by a newline to standard error; and
 - exit nonzero.
 
-Error shape:
+In default mode, the diagnostic is concise plain text prefixed with `jevq: error:`. For example:
+
+```text
+jevq: error: exactly one mode is required
+```
+
+With `-j`/`--json`, the diagnostic is one compact JSON object:
 
 ```json
 {"error":{"code":"usage_error","message":"exactly one mode is required"}}
 ```
 
-For HTTP/API failures, optional safe details may be added under `error.details`; they must not contain the API key or request headers. If the response body is JSON, include only bounded, useful API error fields rather than echoing an arbitrarily large body.
+The selected format applies to every error, including argument-parser errors. The implementation must therefore detect `-j`/`--json` before full argument validation. In JSON mode, HTTP/API failures may add optional safe details under `error.details`; in plain mode, incorporate only a concise safe message. Neither format may contain the API key or request headers. If the response body is JSON, include only bounded, useful API error fields rather than echoing an arbitrarily large body.
 
 Exit statuses:
 
@@ -203,9 +222,9 @@ Suggested HTTP mappings:
 - 429: `rate_limited`
 - other non-2xx responses: `api_error`
 
-Use a finite request timeout. The exact connect/read timeout and whether transient failures are retried are blocking reliability decisions in section 10. If retries are adopted, retry only safe transient cases such as connection failures, 429, and 5xx responses; use bounded exponential backoff, honor `Retry-After`, and cap the number of attempts.
+Use a 30-second request timeout and do not retry in the initial version. This creates predictable command latency and avoids silently repeating a billable request. Reconsider separate connect/read timeouts and bounded retries after initial integration testing provides real failure and latency data.
 
-Unexpected internal exceptions must still use the JSON error contract. Normal operation must not emit a Python traceback.
+Unexpected internal exceptions must still use the selected error-output contract. Normal operation must not emit a Python traceback.
 
 ## 8. Implementation and quality requirements
 
@@ -215,48 +234,41 @@ Unexpected internal exceptions must still use the JSON error contract. Normal op
 - Send UTF-8 and correctly support Unicode in questions, criteria, and state.
 - Do not log input state by default because it may contain sensitive content.
 - Make the HTTP transport injectable or otherwise mockable so automated tests do not call the live API.
-- Pin and document any third-party runtime dependency. A standard-library-only HTTP implementation is preferred for this small utility unless the project chooses a dependency manager.
+- Use only the Python standard library in the initial version. Reconsider an HTTP dependency after initial testing if the standard-library transport materially complicates timeout, TLS, or error handling.
 
 ## 9. Acceptance criteria
 
 Automated tests should verify at least:
 
-1. each mode produces the expected request body and reduced output;
+1. each mode produces the expected request body, default plain-text output, and `--json` output;
 2. `-p` and `-n` are behaviorally identical;
 3. mode exclusivity and required arguments;
-4. choice/criteria trimming, empty values, duplicates, and minimum cardinality;
+4. choice/criteria trimming, empty values, duplicates, control characters, and minimum cardinality;
 5. positional state, multiline stdin state, interactive-stdin failure, and positional-over-stdin precedence;
-6. missing and blank `TYPESAFE_API_KEY` handling;
-7. Unicode request and response handling;
-8. every documented HTTP and response-schema error class;
-9. timeout behavior and any agreed retry policy;
-10. no error path writes to stdout or leaks the API key; and
-11. successful output is valid JSON with a trailing newline and no other text.
+6. the default model, a `--model` override, and a blank model value;
+7. missing and blank `TYPESAFE_API_KEY` handling;
+8. Unicode request and response handling;
+9. argument-parser, HTTP, and response-schema errors in both output modes;
+10. the 30-second timeout and absence of automatic retries;
+11. no error path writes to stdout or leaks the API key; and
+12. successful JSON-mode output is valid JSON with a trailing newline and no other text.
 
 Live API tests, if added, must be opt-in and skipped when credentials are unavailable.
 
-## 10. Decisions blocking implementation planning
+## 10. Implementation-planning status
 
-The following issues must be resolved before the implementation contract can be considered stable:
+No product decision currently blocks implementation planning. Review comments resolved the earlier blockers as follows:
 
-1. **Score rubric syntax.** The original score example supplies only a question, but the API requires ordered `criteria`. Approve `--criteria` as specified above, choose another representation (for example repeated `--level` flags), or define a documented default rubric. An implicit generic rubric is not recommended because its semantics would be unclear.
-Comment: proceed as proposed here.
+1. **Score rubric syntax:** use the required comma-separated `--criteria` argument described in section 3.4.
+2. **Model selection:** use `-m`/`--model`, defaulting to `jev-latest`.
+3. **Output compatibility:** default to bare plain-text results and plain-text errors; use `-j`/`--json` for the reduced JSON results and structured JSON errors.
+4. **Initial reliability policy:** use one 30-second request timeout with no automatic retries.
 
-2. **Model selection.** The API requires `model`. Confirm a fixed `jev-latest` default, add a `--model` option, or use an environment variable. A fixed alias is simplest but allows upstream behavior to change without a CLI release.
-Comment: add a -m --model option defaulting to 'jev-latest'
+The following decisions are intentionally deferred until after initial testing and do not block implementation:
 
-3. **Success output compatibility.** Confirm whether “choice: return the scores and confidence” means the current API's `choice`, `probabilities`, and `confidence`, and whether noul/score results should be one-field objects as proposed or bare JSON numbers. This affects every downstream caller.
-Comment: let's add a -j --json mode.  Default is off.  When off it just prints the barest possible output: the chosen option, the noul bare probability, the bare score.  Errors in plain text.  In -j mode the output is always JSON.
-
-4. **Timeout and retry policy.** Set concrete timeout values and decide whether a command-line tool should retry. Retries improve resilience but can increase latency and repeat billable requests.
-
-The following decisions are important but do not prevent a first implementation if the recommendations in this document are accepted:
-Comment: Hold a decision for after initial testing, except where one is needed to proceed.
-
-5. **Dependency strategy.** Choose standard-library HTTP or establish a dependency/packaging mechanism for a library such as `requests`.
-6. **Installable command.** Decide whether delivery is only `jevq.py`, an executable script, or an installable Python package exposing the `jevq` console command.
-
-7. **Endpoint override.** A hidden or documented override is useful for testing and future gateways, but it expands the supported configuration surface and can create credential-leak risks if misused.
+- whether observed network behavior warrants separate connect/read timeouts, retries, or a third-party HTTP dependency;
+- whether to distribute only an executable `jevq.py` or add Python packaging that installs a `jevq` console command; and
+- whether to support an endpoint override for test servers or alternate providers.
 
 ## 11. Corrections to the original draft
 
@@ -264,3 +276,4 @@ Comment: Hold a decision for after initial testing, except where one is needed t
 - The Jev term is **noul**, not “noul/probability percent.” The returned value is a number from 0 to 1.
 - The current API calls choice likelihoods `probabilities`, not `scores`.
 - Score requests need an ordered rubric; a question alone is insufficient for the current API schema.
+- Output is plain text by default; `-j`/`--json` selects machine-readable JSON for successes and errors.
