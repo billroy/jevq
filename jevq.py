@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line client for the TypeSafe Jev System One API."""
+"""Command-line client for Jev's TypeSafe-compatible System One API."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence, TextIO
 
 
-API_URL = "https://api.typesafe.ai/v1/systemone"
-DEFAULT_MODEL = "jev-latest"
 REQUEST_TIMEOUT_SECONDS = 30
 QUESTION_ID = "question"
 ERROR_BODY_LIMIT = 64 * 1024
@@ -65,7 +63,40 @@ class JevqArgumentParser(argparse.ArgumentParser):
 
 
 @dataclass(frozen=True)
+class ProviderProfile:
+    key: str
+    display_name: str
+    api_url: str
+    default_model: str
+    credential_envs: tuple[str, ...]
+
+
+TYPESAFE_PROVIDER = ProviderProfile(
+    key="typesafe",
+    display_name="TypeSafe",
+    api_url="https://api.typesafe.ai/v1/systemone",
+    default_model="jev-latest",
+    credential_envs=("TYPESAFE_API_KEY",),
+)
+VERCEL_PROVIDER = ProviderProfile(
+    key="vercel",
+    display_name="Vercel AI Gateway",
+    api_url="https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    default_model="typesafe-ai/jev",
+    credential_envs=("AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN"),
+)
+PROVIDERS = {
+    provider.key: provider for provider in (TYPESAFE_PROVIDER, VERCEL_PROVIDER)
+}
+
+# Backwards-compatible names for callers that imported the original constants.
+API_URL = TYPESAFE_PROVIDER.api_url
+DEFAULT_MODEL = TYPESAFE_PROVIDER.default_model
+
+
+@dataclass(frozen=True)
 class CliConfig:
+    provider: ProviderProfile
     mode: str
     question: str
     model: str
@@ -88,7 +119,7 @@ def detect_json_mode(argv: Sequence[str]) -> bool:
 def make_parser(output: TextIO) -> JevqArgumentParser:
     parser = JevqArgumentParser(
         prog="jevq",
-        description="Ask one typed question using the TypeSafe Jev API.",
+        description="Ask one typed question using a Jev System One provider.",
         output=output,
     )
     modes = parser.add_mutually_exclusive_group(required=True)
@@ -106,7 +137,15 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
     modes.add_argument("-s", "--score", dest="mode", action="store_const", const="score")
 
     parser.add_argument("-q", "--question", required=True, help="question instructions")
-    parser.add_argument("-m", "--model", default=DEFAULT_MODEL, help="TypeSafe model name")
+    parser.add_argument(
+        "--provider",
+        choices=tuple(PROVIDERS),
+        default=TYPESAFE_PROVIDER.key,
+        help="API provider (default: typesafe)",
+    )
+    parser.add_argument(
+        "-m", "--model", help="model name (defaults to the provider's Jev model)"
+    )
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON output")
     parser.add_argument("--criteria", help="comma-separated ordered levels for score mode")
     parser.add_argument("text", nargs="*", metavar="TEXT", help="state text")
@@ -147,11 +186,13 @@ def parse_labels(value: str, option_name: str) -> tuple[str, ...]:
 def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
     args = make_parser(output).parse_args(list(argv))
 
+    provider = PROVIDERS[args.provider]
     mode = "choice" if args.choices is not None else args.mode
+    model = provider.default_model if args.model is None else args.model
 
     if not args.question.strip():
         raise JevqError("invalid_input", "question must not be blank", 2)
-    if not args.model.strip():
+    if not model.strip():
         raise JevqError("invalid_input", "model must not be blank", 2)
 
     labels: tuple[str, ...] = ()
@@ -168,9 +209,10 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
             raise JevqError("usage_error", "--criteria is valid only in score mode", 2)
 
     return CliConfig(
+        provider=provider,
         mode=mode,
         question=args.question,
-        model=args.model,
+        model=model,
         json_mode=args.json,
         labels=labels,
         text_parts=tuple(args.text),
@@ -192,13 +234,18 @@ def read_state(text_parts: Sequence[str], stdin: TextIO) -> str:
     return state
 
 
-def load_api_key(environ: Mapping[str, str]) -> str:
-    api_key = environ.get("TYPESAFE_API_KEY")
-    if api_key is None or not api_key.strip():
-        raise JevqError(
-            "configuration_error", "TYPESAFE_API_KEY is missing or blank", 3
-        )
-    return api_key
+def load_api_key(
+    environ: Mapping[str, str], provider: ProviderProfile = TYPESAFE_PROVIDER
+) -> str:
+    for variable in provider.credential_envs:
+        api_key = environ.get(variable)
+        if api_key is not None and api_key.strip():
+            return api_key
+
+    variable_names = " or ".join(provider.credential_envs)
+    raise JevqError(
+        "configuration_error", f"{variable_names} is missing or blank", 3
+    )
 
 
 def build_payload(config: CliConfig, state: str) -> dict[str, Any]:
@@ -218,16 +265,24 @@ def build_payload(config: CliConfig, state: str) -> dict[str, Any]:
     }
 
 
-def _http_error(status: int) -> JevqError:
+def _http_error(status: int, provider: ProviderProfile) -> JevqError:
     details = {"status": status}
     if status in (401, 403):
         return JevqError(
-            "authentication_error", "TypeSafe authentication failed", 5, details
+            "authentication_error",
+            f"{provider.display_name} authentication failed",
+            5,
+            details,
         )
     if status == 429:
-        return JevqError("rate_limited", "TypeSafe rate limit exceeded", 5, details)
+        return JevqError(
+            "rate_limited",
+            f"{provider.display_name} rate limit exceeded",
+            5,
+            details,
+        )
     return JevqError(
-        "api_error", f"TypeSafe API returned HTTP {status}", 5, details
+        "api_error", f"{provider.display_name} returned HTTP {status}", 5, details
     )
 
 
@@ -256,10 +311,12 @@ def call_api(
     payload: Mapping[str, Any],
     api_key: str,
     opener: Callable[..., Any] | None = None,
+    *,
+    provider: ProviderProfile = TYPESAFE_PROVIDER,
 ) -> Any:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
-        API_URL,
+        provider.api_url,
         data=body,
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -276,26 +333,36 @@ def call_api(
             status = response.getcode()
         if status is not None and not 200 <= int(status) < 300:
             _discard_error_body(response)
-            raise _http_error(int(status))
+            raise _http_error(int(status), provider)
         response_body = _read_response(response)
     except urllib.error.HTTPError as error:
         _discard_error_body(error)
-        raise _http_error(error.code) from None
+        raise _http_error(error.code, provider) from None
     except urllib.error.URLError as error:
         if isinstance(error.reason, (socket.timeout, TimeoutError)):
-            raise JevqError("timeout", "TypeSafe API request timed out", 4) from None
-        raise JevqError("network_error", "TypeSafe API request failed", 4) from None
+            raise JevqError(
+                "timeout", f"{provider.display_name} request timed out", 4
+            ) from None
+        raise JevqError(
+            "network_error", f"{provider.display_name} request failed", 4
+        ) from None
     except (socket.timeout, TimeoutError):
-        raise JevqError("timeout", "TypeSafe API request timed out", 4) from None
+        raise JevqError(
+            "timeout", f"{provider.display_name} request timed out", 4
+        ) from None
     except OSError:
-        raise JevqError("network_error", "TypeSafe API request failed", 4) from None
+        raise JevqError(
+            "network_error", f"{provider.display_name} request failed", 4
+        ) from None
 
     try:
         decoded = response_body.decode("utf-8")
         return json.loads(decoded)
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise JevqError(
-            "response_error", "TypeSafe API returned an invalid JSON response", 6
+            "response_error",
+            f"{provider.display_name} returned an invalid JSON response",
+            6,
         ) from None
 
 
@@ -440,9 +507,9 @@ def main(
     try:
         config = parse_cli(arguments, output_stream)
         state = read_state(config.text_parts, input_stream)
-        api_key = load_api_key(environment)
+        api_key = load_api_key(environment, config.provider)
         payload = build_payload(config, state)
-        document = call_api(payload, api_key, opener)
+        document = call_api(payload, api_key, opener, provider=config.provider)
         answer = extract_answer(document, config.mode, config.labels)
         write_success(answer, config.mode, config.json_mode, output_stream)
         return 0

@@ -32,10 +32,13 @@ detect output mode -> parse/validate CLI -> read state -> build payload
                                             render result or error
 ```
 
-Planned constants:
+Provider profiles:
 
-- `API_URL = "https://api.typesafe.ai/v1/systemone"`
-- `DEFAULT_MODEL = "jev-latest"`
+- `typesafe`: `https://api.typesafe.ai/v1/systemone`, `jev-latest`, and `TYPESAFE_API_KEY`
+- `vercel`: `https://ai-gateway.vercel.sh/typesafe/v1/systemone`, `typesafe-ai/jev`, and `AI_GATEWAY_API_KEY`/`VERCEL_OIDC_TOKEN`
+
+Common constants:
+
 - `REQUEST_TIMEOUT_SECONDS = 30`
 - `QUESTION_ID = "question"`
 - a bounded maximum retained error-body size, initially 64 KiB
@@ -49,9 +52,9 @@ Planned functions and responsibilities:
 | `parse_cli(argv)` | Parse arguments and enforce cross-option rules such as the choice list consumed by `-c`/`--choices` and score-specific `--criteria`. |
 | `parse_labels(value, option_name)` | Split, trim, and validate choices or score criteria while preserving order. |
 | `read_state(text_parts, stdin)` | Apply positional-over-stdin precedence without accidentally blocking on a terminal. |
-| `load_api_key(environ)` | Validate `TYPESAFE_API_KEY` without exposing its value. |
+| `load_api_key(environ, provider)` | Resolve the selected provider's credential variables without exposing their values. |
 | `build_payload(config, state)` | Produce the exact `model`/`state`/`questions` request document. |
-| `call_api(payload, api_key, opener)` | Serialize UTF-8 JSON, perform the POST with a 30-second timeout, and translate transport/HTTP failures. |
+| `call_api(payload, api_key, opener, provider=...)` | Serialize UTF-8 JSON, POST to the selected provider with a 30-second timeout, and translate transport/HTTP failures. |
 | `extract_answer(document, mode, labels)` | Validate the response envelope and typed answer before returning the reduced result. |
 | `write_success(answer, mode, json_mode, stdout)` | Emit either the bare result or the documented compact JSON object. |
 | `write_error(error, json_mode, stderr)` | Emit one sanitized plain-text or JSON diagnostic. |
@@ -141,7 +144,7 @@ Use `unittest`, `unittest.mock`, `io.StringIO`, and small fake response/opener o
 - positional text wins without reading redirected stdin;
 - interactive stdin without positional state fails immediately;
 - whitespace-only state fails; and
-- missing, blank, and valid `TYPESAFE_API_KEY` values.
+- missing, blank, and valid provider credentials, including Vercel's OIDC fallback.
 
 ### 6.3 Request construction and transport
 
@@ -171,7 +174,7 @@ python3 -m unittest -v
 ## 7. Implementation sequence
 
 1. Create the error type, parser, early JSON-mode detection, and CLI validation helpers.
-2. Implement state/key loading and request construction; cover them with pure unit tests.
+2. Implement state/provider credential loading and request construction; cover them with pure unit tests.
 3. Implement the injectable `urllib` transport and failure mapping; test with fake openers.
 4. Implement strict response validation and plain/JSON rendering.
 5. Wire `main()` and add end-to-end in-process CLI contract tests.

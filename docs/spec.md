@@ -2,7 +2,11 @@
 
 ## 1. Purpose
 
-`jevq` is a small Python command-line client for the TypeSafe Jev System One API. It submits one item of input state and one typed question, then writes the relevant typed answer as plain text or, when requested, JSON.
+`jevq` is a small Python command-line client for Jev's TypeSafe-compatible
+System One API. It submits one item of input state and one typed question, then
+writes the relevant typed answer as plain text or, when requested, JSON. It can
+call TypeSafe directly or route the compatible request through Vercel AI
+Gateway.
 
 The implementation lives in `jevq.py`, and invoking `python3 jevq.py ...` must work. Examples use `jevq` as the intended installed command name; the installation mechanism is deferred until after initial testing.
 
@@ -12,16 +16,21 @@ This version supports exactly one question per invocation and one of Jev's three
 - **noul**: estimate the probability that a yes/no proposition is true; or
 - **score**: rate the state against an ordered, caller-supplied rubric.
 
-Batching multiple questions in one API call, structured (non-string) state, alternate providers, and local caching are out of scope.
+Batching multiple questions in one API call, structured (non-string) state,
+arbitrary/custom providers, and local caching are out of scope.
 
 ## 2. External API contract
 
-Use the TypeSafe API described by its OpenAPI document:
+Use the TypeSafe-compatible API selected by `--provider`:
 
-- endpoint: `POST https://api.typesafe.ai/v1/systemone`
-- authentication: `Authorization: Bearer <TYPESAFE_API_KEY>`
+| Provider | Endpoint | Default model | Credentials |
+| --- | --- | --- | --- |
+| `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
+| `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
+
+- authentication: `Authorization: Bearer <provider credential>`
 - content type: `application/json`
-- model: the value of `--model`, which defaults to `jev-latest`
+- model: the value of `--model`, or the selected provider's default
 - question ID: `question`
 
 The request body has this common shape:
@@ -51,12 +60,16 @@ For choice mode, a bare CLI choice label is sent with a JSON `null` description.
 
 The client must use the answer at `answers.question`. A successful HTTP response that is not JSON, has no `answers.question`, or contains an answer type different from the requested type is a response-schema error rather than a successful invocation.
 
-The API reference used to plan implementation is the [official TypeSafe OpenAPI document](https://api.typesafe.ai/openapi.json). The implementation should isolate the endpoint and default model as constants so API changes are easy to accommodate.
+The API references used to plan implementation are the
+[official TypeSafe OpenAPI document](https://api.typesafe.ai/openapi.json) and
+[Vercel's TypeSafe-compatible API documentation](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe).
+The implementation groups endpoint, default model, credential variables, and
+display name into provider profiles so API changes are easy to accommodate.
 
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -77,7 +90,8 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `-m MODEL`, `--model MODEL` | no | TypeSafe model name or alias; defaults to `jev-latest` |
+| `--provider {typesafe,vercel}` | no | API provider; defaults to `typesafe` |
+| `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
 
@@ -136,11 +150,17 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 
 ## 5. Configuration
 
-`TYPESAFE_API_KEY` is required and must contain a non-whitespace value. A missing or blank key is a configuration error detected before any network request. The key must never appear in output, error details, tracebacks, or logs.
+The selected provider must have a non-blank credential. TypeSafe reads
+`TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back to
+`VERCEL_OIDC_TOKEN`. A missing or blank credential is a configuration error
+detected before any network request. Credentials must never appear in output,
+error details, tracebacks, or logs.
 
 The first version has no command-line API-key option. This avoids leaking credentials through shell history and process listings.
 
-The endpoint is not user-configurable in the initial interface. The model is selected with `--model` and defaults to `jev-latest`.
+The endpoint is selected by the provider profile and is not otherwise
+user-configurable. The model is selected with `--model` or defaults according
+to the provider.
 
 ## 6. Output contract
 
@@ -245,8 +265,8 @@ Automated tests should verify at least:
 3. mode exclusivity and required arguments;
 4. choice/criteria trimming, empty values, duplicates, control characters, and minimum cardinality;
 5. positional state, multiline stdin state, interactive-stdin failure, and positional-over-stdin precedence;
-6. the default model, a `--model` override, and a blank model value;
-7. missing and blank `TYPESAFE_API_KEY` handling;
+6. each provider's default model, a `--model` override, and a blank model value;
+7. provider endpoint selection and missing, blank, and fallback credential handling;
 8. Unicode request and response handling;
 9. argument-parser, HTTP, and response-schema errors in both output modes;
 10. the 30-second timeout and absence of automatic retries;
@@ -268,7 +288,7 @@ The following decisions are intentionally deferred until after initial testing a
 
 - whether observed network behavior warrants separate connect/read timeouts, retries, or a third-party HTTP dependency;
 - whether to distribute only an executable `jevq.py` or add Python packaging that installs a `jevq` console command; and
-- whether to support an endpoint override for test servers or alternate providers.
+- whether to support an endpoint override for test servers or arbitrary providers.
 
 ## 11. Corrections to the original draft
 

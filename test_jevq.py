@@ -191,6 +191,57 @@ class JevqTests(unittest.TestCase):
                 payload = json.loads(opener.calls[0][0].data)
                 self.assertEqual(payload["model"], expected)
 
+    def test_vercel_provider_uses_gateway_profile(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "vercel", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={"AI_GATEWAY_API_KEY": "gateway-key"},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        request, timeout = opener.calls[0]
+        self.assertEqual(request.full_url, jevq.VERCEL_PROVIDER.api_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer gateway-key")
+        self.assertEqual(timeout, jevq.REQUEST_TIMEOUT_SECONDS)
+        payload = json.loads(request.data)
+        self.assertEqual(payload["model"], "typesafe-ai/jev")
+
+    def test_vercel_provider_accepts_oidc_and_model_override(self):
+        _, _, _, opener = self.run_main(
+            [
+                "--provider",
+                "vercel",
+                "-p",
+                "-m",
+                "typesafe-ai/jev-pinned",
+                "-q",
+                "Question?",
+                "state",
+            ],
+            response=noul_response(),
+            environ={
+                "AI_GATEWAY_API_KEY": " ",
+                "VERCEL_OIDC_TOKEN": "oidc-token",
+            },
+        )
+        request = opener.calls[0][0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer oidc-token")
+        self.assertEqual(
+            json.loads(request.data)["model"], "typesafe-ai/jev-pinned"
+        )
+
+    def test_vercel_api_key_takes_precedence_over_oidc(self):
+        _, _, _, opener = self.run_main(
+            ["--provider", "vercel", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={
+                "AI_GATEWAY_API_KEY": "gateway-key",
+                "VERCEL_OIDC_TOKEN": "oidc-token",
+            },
+        )
+        self.assertEqual(
+            opener.calls[0][0].get_header("Authorization"), "Bearer gateway-key"
+        )
+
     def test_unicode_is_sent_as_utf8(self):
         _, _, _, opener = self.run_main(
             ["-p", "-q", "¿Está bien?", "café", "☕"], response=noul_response()
@@ -276,6 +327,15 @@ class JevqTests(unittest.TestCase):
                 self.assertIn("TYPESAFE_API_KEY", error)
                 self.assertEqual(opener.calls, [])
 
+    def test_vercel_missing_credentials_names_both_options(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "vercel", "-p", "-q", "Q", "state"], environ={}
+        )
+        self.assertEqual((status, output), (3, ""))
+        self.assertIn("AI_GATEWAY_API_KEY", error)
+        self.assertIn("VERCEL_OIDC_TOKEN", error)
+        self.assertEqual(opener.calls, [])
+
     def test_help_succeeds_without_key_or_network(self):
         status, output, error, opener = self.run_main(
             ["--help"], environ={}, terminal=True
@@ -303,6 +363,22 @@ class JevqTests(unittest.TestCase):
                 self.assertEqual((status, output), (5, ""))
                 self.assertEqual(parsed["error"]["code"], code)
                 self.assertEqual(parsed["error"]["details"]["status"], http_status)
+
+    def test_vercel_errors_name_the_selected_provider(self):
+        failure = urllib.error.HTTPError(
+            jevq.VERCEL_PROVIDER.api_url,
+            401,
+            "failed",
+            {},
+            io.BytesIO(b'{}'),
+        )
+        status, output, error, _ = self.run_main(
+            ["--provider", "vercel", "-p", "-q", "Q", "state"],
+            opener=RecordingOpener(error=failure),
+            environ={"AI_GATEWAY_API_KEY": "gateway-key"},
+        )
+        self.assertEqual((status, output), (5, ""))
+        self.assertIn("Vercel AI Gateway", error)
 
     def test_timeout_and_network_errors_are_not_retried(self):
         failures = [
