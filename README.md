@@ -31,13 +31,22 @@ An explicit `--model` overrides the selected provider's default model.
 
 ## Simple install
 
-For a single-user or system-local install, copy the script onto your `PATH` and make it executable in one step:
+For a single-user install, run the installer from the repository:
 
 ```shell
-install -m 755 jevq.py /usr/local/bin/jevq
+./install.sh
 ```
 
-Use a different destination if your local tools directory is elsewhere, for example `~/.local/bin/jevq`. After installing, run `jevq` directly:
+It creates the destination directory if needed and installs the executable at
+`~/.local/bin/jevq`. Ensure `~/.local/bin` is on your `PATH`.
+
+Pass a destination to install somewhere else, such as `/usr/local/bin`:
+
+```shell
+sudo ./install.sh /usr/local/bin/jevq
+```
+
+After installing, run `jevq` directly:
 
 ```shell
 jevq -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
