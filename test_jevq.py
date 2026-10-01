@@ -242,6 +242,29 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].get_header("Authorization"), "Bearer gateway-key"
         )
 
+    def test_jeff_provider_uses_local_server_without_credentials(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "jeff", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        request, timeout = opener.calls[0]
+        self.assertEqual(request.full_url, jevq.JEFF_PROVIDER.api_url)
+        self.assertIsNone(request.get_header("Authorization"))
+        self.assertEqual(timeout, jevq.REQUEST_TIMEOUT_SECONDS)
+        self.assertEqual(json.loads(request.data)["model"], "jeff-latest")
+
+    def test_jeff_provider_sends_optional_api_key(self):
+        _, _, _, opener = self.run_main(
+            ["--provider", "jeff", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={"JEFF_API_KEY": "jeff-key"},
+        )
+        self.assertEqual(
+            opener.calls[0][0].get_header("Authorization"), "Bearer jeff-key"
+        )
+
     def test_unicode_is_sent_as_utf8(self):
         _, _, _, opener = self.run_main(
             ["-p", "-q", "¿Está bien?", "café", "☕"], response=noul_response()
@@ -283,6 +306,31 @@ class JevqTests(unittest.TestCase):
                     ["-c", value, "-q", "Q", "state"]
                 )
                 self.assertEqual((status, output != "", error != ""), (2, False, True))
+
+    def test_number_like_choice_keys_are_rejected(self):
+        for value in ("1,two", "+1,two", "1.0,two", ".5,two", "1e2,two"):
+            with self.subTest(value=value):
+                status, output, error, opener = self.run_main(
+                    ["--provider", "jeff", "-c", value, "-q", "Q", "state"],
+                    environ={},
+                )
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn("bare number", error)
+                self.assertEqual(opener.calls, [])
+
+    def test_jeff_option_limits_are_validated_before_request(self):
+        cases = [
+            (["--provider", "jeff", "-c", ",".join(f"o{i}" for i in range(255))], "254 options"),
+            (["--provider", "jeff", "-s", "--criteria", ",".join(f"level{i}" for i in range(11))], "2 to 10 levels"),
+        ]
+        for mode_args, fragment in cases:
+            with self.subTest(fragment=fragment):
+                status, output, error, opener = self.run_main(
+                    [*mode_args, "-q", "Q", "state"], environ={}
+                )
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn(fragment, error)
+                self.assertEqual(opener.calls, [])
 
     def test_blank_question_model_and_state(self):
         cases = [
@@ -346,7 +394,16 @@ class JevqTests(unittest.TestCase):
         self.assertEqual(opener.calls, [])
 
     def test_http_error_mappings(self):
-        for http_status, code in ((401, "authentication_error"), (403, "authentication_error"), (429, "rate_limited"), (500, "api_error")):
+        cases = (
+            (401, "authentication_error"),
+            (403, "authentication_error"),
+            (422, "invalid_request"),
+            (429, "rate_limited"),
+            (503, "not_ready"),
+            (529, "busy"),
+            (500, "api_error"),
+        )
+        for http_status, code in cases:
             with self.subTest(http_status=http_status):
                 failure = urllib.error.HTTPError(
                     jevq.API_URL,
@@ -483,6 +540,25 @@ class JevqTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 6)
                 self.assertEqual(json.loads(error)["error"]["code"], "response_error")
+
+    def test_jeff_score_response_does_not_require_legend(self):
+        response = score_response()
+        del response["answers"]["question"]["legend"]
+        status, output, error, _ = self.run_main(
+            [
+                "--provider",
+                "jeff",
+                "-s",
+                "--criteria",
+                "calm,annoyed,hostile",
+                "-q",
+                "Q",
+                "state",
+            ],
+            response=response,
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "1.7\n", ""))
 
     def test_unexpected_failure_is_sanitized_and_key_is_not_leaked(self):
         secret = "super-secret-key"

@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import os
+import re
 import socket
 import sys
 import urllib.error
@@ -69,6 +70,7 @@ class ProviderProfile:
     api_url: str
     default_model: str
     credential_envs: tuple[str, ...]
+    credential_required: bool = True
 
 
 TYPESAFE_PROVIDER = ProviderProfile(
@@ -85,8 +87,17 @@ VERCEL_PROVIDER = ProviderProfile(
     default_model="typesafe-ai/jev",
     credential_envs=("AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN"),
 )
+JEFF_PROVIDER = ProviderProfile(
+    key="jeff",
+    display_name="Jeff",
+    api_url="http://localhost:8765/v1/systemone",
+    default_model="jeff-latest",
+    credential_envs=("JEFF_API_KEY",),
+    credential_required=False,
+)
 PROVIDERS = {
-    provider.key: provider for provider in (TYPESAFE_PROVIDER, VERCEL_PROVIDER)
+    provider.key: provider
+    for provider in (TYPESAFE_PROVIDER, VERCEL_PROVIDER, JEFF_PROVIDER)
 }
 
 # Backwards-compatible names for callers that imported the original constants.
@@ -183,6 +194,9 @@ def parse_labels(value: str, option_name: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
+NUMBER_LIKE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
 def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
     args = make_parser(output).parse_args(list(argv))
 
@@ -200,10 +214,32 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
         if args.criteria is not None:
             raise JevqError("usage_error", "--criteria is valid only in score mode", 2)
         labels = parse_labels(args.choices, "--choices")
+        number_like = next(
+            (
+                label
+                for label in labels
+                if provider is JEFF_PROVIDER and NUMBER_LIKE.match(label)
+            ),
+            None,
+        )
+        if number_like is not None:
+            raise JevqError(
+                "invalid_input",
+                f"choice {number_like!r} is a bare number; use a key such as 'o1' or a short word",
+                2,
+            )
+        if provider is JEFF_PROVIDER and len(labels) > 254:
+            raise JevqError(
+                "invalid_input", "Jeff choice questions support at most 254 options", 2
+            )
     elif mode == "score":
         if args.criteria is None:
             raise JevqError("usage_error", "score mode requires --criteria", 2)
         labels = parse_labels(args.criteria, "--criteria")
+        if provider is JEFF_PROVIDER and len(labels) > 10:
+            raise JevqError(
+                "invalid_input", "Jeff score questions support 2 to 10 levels", 2
+            )
     else:
         if args.criteria is not None:
             raise JevqError("usage_error", "--criteria is valid only in score mode", 2)
@@ -236,11 +272,14 @@ def read_state(text_parts: Sequence[str], stdin: TextIO) -> str:
 
 def load_api_key(
     environ: Mapping[str, str], provider: ProviderProfile = TYPESAFE_PROVIDER
-) -> str:
+) -> str | None:
     for variable in provider.credential_envs:
         api_key = environ.get(variable)
         if api_key is not None and api_key.strip():
             return api_key
+
+    if not provider.credential_required:
+        return None
 
     variable_names = " or ".join(provider.credential_envs)
     raise JevqError(
@@ -281,6 +320,16 @@ def _http_error(status: int, provider: ProviderProfile) -> JevqError:
             5,
             details,
         )
+    if status == 422:
+        return JevqError(
+            "invalid_request", f"{provider.display_name} rejected the request", 5, details
+        )
+    if status == 503:
+        return JevqError(
+            "not_ready", f"{provider.display_name} is not ready", 5, details
+        )
+    if status == 529:
+        return JevqError("busy", f"{provider.display_name} is busy", 5, details)
     return JevqError(
         "api_error", f"{provider.display_name} returned HTTP {status}", 5, details
     )
@@ -309,19 +358,19 @@ def _discard_error_body(response: Any) -> None:
 
 def call_api(
     payload: Mapping[str, Any],
-    api_key: str,
+    api_key: str | None,
     opener: Callable[..., Any] | None = None,
     *,
     provider: ProviderProfile = TYPESAFE_PROVIDER,
 ) -> Any:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
         provider.api_url,
         data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     open_request = opener or urllib.request.urlopen
@@ -375,55 +424,76 @@ def _is_finite_number(value: Any) -> bool:
         return False
 
 
-def _probability(value: Any, field: str) -> float | int:
+def _probability(
+    value: Any, field: str, provider: ProviderProfile = TYPESAFE_PROVIDER
+) -> float | int:
     if not _is_finite_number(value) or not 0 <= value <= 1:
         raise JevqError(
-            "response_error", f"TypeSafe response has invalid {field}", 6
+            "response_error", f"{provider.display_name} response has invalid {field}", 6
         )
     return value
 
 
 def extract_answer(
-    document: Any, mode: str, labels: Sequence[str]
+    document: Any,
+    mode: str,
+    labels: Sequence[str],
+    provider: ProviderProfile = TYPESAFE_PROVIDER,
 ) -> dict[str, Any]:
     if not isinstance(document, dict):
-        raise JevqError("response_error", "TypeSafe response must be an object", 6)
+        raise JevqError(
+            "response_error", f"{provider.display_name} response must be an object", 6
+        )
     answers = document.get("answers")
     if not isinstance(answers, dict) or QUESTION_ID not in answers:
         raise JevqError(
-            "response_error", "TypeSafe response is missing answers.question", 6
+            "response_error",
+            f"{provider.display_name} response is missing answers.question",
+            6,
         )
     answer = answers[QUESTION_ID]
     if not isinstance(answer, dict) or answer.get("type") != mode:
         raise JevqError(
-            "response_error", "TypeSafe response has the wrong answer type", 6
+            "response_error",
+            f"{provider.display_name} response has the wrong answer type",
+            6,
         )
 
     if mode == "noul":
-        return {"noul": _probability(answer.get("noul"), "noul")}
+        return {"noul": _probability(answer.get("noul"), "noul", provider)}
 
     if mode == "choice":
         choice = answer.get("choice")
         if not isinstance(choice, str) or choice not in labels:
             raise JevqError(
-                "response_error", "TypeSafe response has an invalid choice", 6
+                "response_error",
+                f"{provider.display_name} response has an invalid choice",
+                6,
             )
-        confidence = _probability(answer.get("confidence"), "confidence")
+        confidence = _probability(answer.get("confidence"), "confidence", provider)
         probabilities = answer.get("probabilities")
         if not isinstance(probabilities, dict) or any(
             label not in probabilities for label in labels
         ):
             raise JevqError(
-                "response_error", "TypeSafe response has invalid choice probabilities", 6
+                "response_error",
+                f"{provider.display_name} response has invalid choice probabilities",
+                6,
+            )
+        if provider is JEFF_PROVIDER and set(probabilities) != set(labels):
+            raise JevqError(
+                "response_error",
+                "Jeff response has invalid choice probabilities",
+                6,
             )
         for label, probability in probabilities.items():
             if not isinstance(label, str):
                 raise JevqError(
                     "response_error",
-                    "TypeSafe response has invalid choice probabilities",
+                    f"{provider.display_name} response has invalid choice probabilities",
                     6,
                 )
-            _probability(probability, f"probability for {label!r}")
+            _probability(probability, f"probability for {label!r}", provider)
         return {
             "choice": choice,
             "probabilities": probabilities,
@@ -436,27 +506,48 @@ def extract_answer(
         or score < 0
         or score > len(labels) - 1
     ):
-        raise JevqError("response_error", "TypeSafe response has an invalid score", 6)
-    _probability(answer.get("confidence"), "confidence")
+        raise JevqError(
+            "response_error", f"{provider.display_name} response has an invalid score", 6
+        )
+    _probability(answer.get("confidence"), "confidence", provider)
     legend = answer.get("legend")
-    if not isinstance(legend, dict) or any(
-        not isinstance(level, str) or not isinstance(description, (str, dict, list))
-        for level, description in legend.items()
+    if (provider is not JEFF_PROVIDER and legend is None) or (
+        legend is not None
+        and (
+            not isinstance(legend, dict)
+            or any(
+                not isinstance(level, str)
+                or not isinstance(description, (str, dict, list))
+                for level, description in legend.items()
+            )
+        )
     ):
         raise JevqError(
-            "response_error", "TypeSafe response has an invalid score legend", 6
+            "response_error",
+            f"{provider.display_name} response has an invalid score legend",
+            6,
         )
     probabilities = answer.get("probabilities")
     if not isinstance(probabilities, dict):
         raise JevqError(
-            "response_error", "TypeSafe response has invalid score probabilities", 6
+            "response_error",
+            f"{provider.display_name} response has invalid score probabilities",
+            6,
+        )
+    if provider is JEFF_PROVIDER and set(probabilities) != {
+        str(index) for index in range(len(labels))
+    }:
+        raise JevqError(
+            "response_error", "Jeff response has invalid score probabilities", 6
         )
     for level, probability in probabilities.items():
         if not isinstance(level, str):
             raise JevqError(
-                "response_error", "TypeSafe response has invalid score probabilities", 6
+                "response_error",
+                f"{provider.display_name} response has invalid score probabilities",
+                6,
             )
-        _probability(probability, f"score probability {level!r}")
+        _probability(probability, f"score probability {level!r}", provider)
     return {"score": score}
 
 
@@ -510,7 +601,9 @@ def main(
         api_key = load_api_key(environment, config.provider)
         payload = build_payload(config, state)
         document = call_api(payload, api_key, opener, provider=config.provider)
-        answer = extract_answer(document, config.mode, config.labels)
+        answer = extract_answer(
+            document, config.mode, config.labels, provider=config.provider
+        )
         write_success(answer, config.mode, config.json_mode, output_stream)
         return 0
     except HelpRequested:

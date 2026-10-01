@@ -36,6 +36,7 @@ Provider profiles:
 
 - `typesafe`: `https://api.typesafe.ai/v1/systemone`, `jev-latest`, and `TYPESAFE_API_KEY`
 - `vercel`: `https://ai-gateway.vercel.sh/typesafe/v1/systemone`, `typesafe-ai/jev`, and `AI_GATEWAY_API_KEY`/`VERCEL_OIDC_TOKEN`
+- `jeff`: `http://localhost:8765/v1/systemone`, `jeff-latest`, and optional `JEFF_API_KEY`
 
 Common constants:
 
@@ -99,7 +100,10 @@ Failure mapping:
 | timeout | `timeout` | 4 |
 | DNS, TLS, connection, or other `URLError` | `network_error` | 4 |
 | HTTP 401/403 | `authentication_error` | 5 |
+| HTTP 422 | `invalid_request` | 5 |
 | HTTP 429 | `rate_limited` | 5 |
+| HTTP 503 | `not_ready` | 5 |
+| HTTP 529 | `busy` | 5 |
 | other non-2xx HTTP status | `api_error` | 5 |
 | invalid UTF-8 or JSON success body | `response_error` | 6 |
 | unexpected response envelope or answer | `response_error` | 6 |
@@ -120,7 +124,7 @@ Mode-specific validation:
 
 - **choice:** `choice` is one of the submitted labels; `confidence` is in `[0, 1]`; `probabilities` is an object containing numeric `[0, 1]` values for the submitted labels. Preserve the API's numbers without rounding.
 - **noul:** `noul` is numeric and in `[0, 1]`.
-- **score:** `score` is finite and lies between `0` and `len(criteria) - 1`; require the documented `confidence`, `legend`, and `probabilities` fields to have their API-schema types even though reduced output only contains `score`.
+- **score:** `score` is finite and lies between `0` and `len(criteria) - 1`; require `confidence` and `probabilities`. TypeSafe responses must include the documented `legend`; Jeff responses may omit it. Reduced output contains only `score`.
 
 Do not enforce exact probability sums because the API documents them as approximately one.
 

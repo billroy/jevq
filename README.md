@@ -1,7 +1,8 @@
 # jevq
 
 `jevq` asks one Choice, Noul, or Score question using Jev's TypeSafe-compatible
-System One API. It supports TypeSafe directly and Vercel AI Gateway.
+System One API. It supports TypeSafe directly, Vercel AI Gateway, and a local
+Jeff server.
 
 It requires Python 3.10 or newer and uses only the Python standard library.
 TypeSafe is the default provider and reads `TYPESAFE_API_KEY`.
@@ -28,6 +29,22 @@ python3 jevq.py --provider vercel -p -q "Does this ask for a refund?" < message.
 ```
 
 An explicit `--model` overrides the selected provider's default model.
+
+## Jeff
+
+Start `jeff-serve` as described in the [Jeff getting-started guide](https://jeffhub.ai/docs/getting-started),
+then select it with `--provider jeff`. The provider calls
+`http://localhost:8765/v1/systemone`, defaults to `jeff-latest`, and does not
+require credentials unless the server has authentication enabled. Set
+`JEFF_API_KEY` when it does.
+
+```shell
+python3 jevq.py --provider jeff -p -q "Does this ask for a refund?" < message.txt
+python3 jevq.py --provider jeff -c refunds,deliveries -m support-intents \
+  -q "Which team should handle this?" < message.txt
+```
+
+Jeff choice keys cannot be bare numbers; use names such as `o1` or short words.
 
 ## Simple install
 

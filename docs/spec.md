@@ -5,8 +5,8 @@
 `jevq` is a small Python command-line client for Jev's TypeSafe-compatible
 System One API. It submits one item of input state and one typed question, then
 writes the relevant typed answer as plain text or, when requested, JSON. It can
-call TypeSafe directly or route the compatible request through Vercel AI
-Gateway.
+call TypeSafe directly, route the compatible request through Vercel AI
+Gateway, or call a local Jeff server.
 
 The implementation lives in `jevq.py`, and invoking `python3 jevq.py ...` must work. Examples use `jevq` as the intended installed command name; the installation mechanism is deferred until after initial testing.
 
@@ -27,8 +27,10 @@ Use the TypeSafe-compatible API selected by `--provider`:
 | --- | --- | --- | --- |
 | `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
+| `jeff` | `POST http://localhost:8765/v1/systemone` | `jeff-latest` | optional `JEFF_API_KEY` |
 
-- authentication: `Authorization: Bearer <provider credential>`
+- authentication: `Authorization: Bearer <provider credential>` for TypeSafe
+  and Vercel, and for Jeff only when `JEFF_API_KEY` is set
 - content type: `application/json`
 - model: the value of `--model`, or the selected provider's default
 - question ID: `question`
@@ -69,7 +71,7 @@ display name into provider profiles so API changes are easy to accommodate.
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -90,7 +92,7 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `--provider {typesafe,vercel}` | no | API provider; defaults to `typesafe` |
+| `--provider {typesafe,vercel,jeff}` | no | API provider; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
@@ -106,6 +108,9 @@ Choice mode is selected with `-c CHOICE[,CHOICE...]` or its long form, `--choice
 - Reject empty items and duplicate items after trimming.
 - Require at least two choices.
 - Reject carriage returns, line feeds, and other ASCII control characters in choice names so plain-text output remains one result per line.
+- With the `jeff` provider, reject number-like choice keys because JavaScript
+  reorders them and can silently change option order.
+- Jeff's current v1.2 models accept at most 254 choices per question.
 - Commas inside choice names and per-choice descriptions are not supported in this version.
 
 Example:
@@ -121,6 +126,7 @@ The TypeSafe API requires score criteria, so score mode requires `--criteria LEV
 - Split and validate it using the same rules as `--choices`.
 - Preserve its order; the first item is score 0, the second is score 1, and so on.
 - Require at least two levels at the CLI even though the current API schema permits one; a one-level scale cannot express a meaningful rating.
+- With the `jeff` provider, allow at most 10 levels.
 - `--criteria` is invalid outside score mode.
 
 Example:
@@ -150,10 +156,11 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 
 ## 5. Configuration
 
-The selected provider must have a non-blank credential. TypeSafe reads
-`TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back to
-`VERCEL_OIDC_TOKEN`. A missing or blank credential is a configuration error
-detected before any network request. Credentials must never appear in output,
+The selected provider must have any required non-blank credential. TypeSafe
+reads `TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back
+to `VERCEL_OIDC_TOKEN`. Jeff optionally reads `JEFF_API_KEY`; no Authorization
+header is sent when it is absent. A missing or blank required credential is a
+configuration error detected before any network request. Credentials must never appear in output,
 error details, tracebacks, or logs.
 
 The first version has no command-line API-key option. This avoids leaking credentials through shell history and process listings.
@@ -233,13 +240,16 @@ Exit statuses:
 | 2 | invalid CLI usage or input | `usage_error`, `invalid_input` |
 | 3 | missing or invalid local configuration | `configuration_error` |
 | 4 | network, timeout, TLS, or DNS failure | `network_error`, `timeout` |
-| 5 | non-success HTTP response | `authentication_error`, `rate_limited`, `api_error` |
+| 5 | non-success HTTP response | `authentication_error`, `invalid_request`, `not_ready`, `busy`, `rate_limited`, `api_error` |
 | 6 | malformed or unexpected success response | `response_error` |
 
 Suggested HTTP mappings:
 
 - 401 or 403: `authentication_error`
+- 422: `invalid_request`
 - 429: `rate_limited`
+- 503: `not_ready`
+- 529: `busy`
 - other non-2xx responses: `api_error`
 
 Use a 30-second request timeout and do not retry in the initial version. This creates predictable command latency and avoids silently repeating a billable request. Reconsider separate connect/read timeouts and bounded retries after initial integration testing provides real failure and latency data.
