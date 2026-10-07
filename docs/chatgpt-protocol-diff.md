@@ -152,6 +152,7 @@ is the same information in a less directly addressable representation.
 Jevq treats these differences as a provider transport concern. Its CLI and
 output contract remain Jev-native:
 
+- `--provider chatgpt` and `--provider openai` are exact synonyms.
 - `-p`, `--probability`, and `-n`/`--noul` continue to select noul mode.
 - Plain output remains the bare probability, choice, or score.
 - JSON noul output remains `{"noul": ...}`.
@@ -176,6 +177,12 @@ The codec validates all names, option values, score indices, labels,
 probabilities, and confidence values before normalizing the answer. A ChatGPT
 `refusal` is reported as a refusal error with exit status 6 because the HTTP
 request succeeded but did not produce the requested Jevq answer.
+
+For HTTP 429 responses, Jevq parses only a bounded error body and recognizes a
+small allowlist of safe OpenAI error codes. This keeps
+`credit_balance_exhausted`, organization/project spend limits, organization
+usage limits, and `slow_down` distinct from genuine request-rate exhaustion
+without echoing arbitrary provider messages.
 
 Jevq intentionally does not expose ChatGPT's multi-question or image-input
 extensions in this change. They are useful additions, but they are outside the

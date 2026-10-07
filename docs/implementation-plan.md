@@ -101,7 +101,7 @@ Failure mapping:
 | DNS, TLS, connection, or other `URLError` | `network_error` | 4 |
 | HTTP 401/403 | `authentication_error` | 5 |
 | HTTP 422 | `invalid_request` | 5 |
-| HTTP 429 | `rate_limited` | 5 |
+| HTTP 429 | `rate_limited`, or a recognized safe OpenAI quota/limit code | 5 |
 | HTTP 503 | `not_ready` | 5 |
 | HTTP 529 | `busy` | 5 |
 | other non-2xx HTTP status | `api_error` | 5 |

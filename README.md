@@ -32,8 +32,9 @@ An explicit `--model` overrides the selected provider's default model.
 
 ## ChatGPT Decisions API
 
-Select ChatGPT with `--provider chatgpt`. The provider reads `OPENAI_API_KEY`,
-calls `https://api.openai.com/v1/decisions`, and defaults to `gpt-6-luna`.
+Select ChatGPT with `--provider chatgpt` or its exact synonym
+`--provider openai`. The provider reads `OPENAI_API_KEY`, calls
+`https://api.openai.com/v1/decisions`, and defaults to `gpt-6-luna`.
 
 ```shell
 export OPENAI_API_KEY="your_openai_api_key"
@@ -101,7 +102,9 @@ jevq -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
 With `--json`, errors use the same return codes and are emitted as JSON with an
 `error.code` such as `usage_error`, `configuration_error`, `timeout`,
 `authentication_error`, `rate_limited`, `api_error`, `response_error`, or
-`refusal`.
+`refusal`. Recognized OpenAI 429 responses retain safe, specific codes such as
+`credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+`project_spend_limit_exceeded`, and `organization_usage_limit_exceeded`.
 
 See [the specification](docs/spec.md) for the complete interface and [the implementation plan](docs/implementation-plan.md) for design details.
 

@@ -338,6 +338,28 @@ class JevqTests(unittest.TestCase):
             },
         )
 
+    def test_openai_is_a_synonym_for_chatgpt(self):
+        requests = []
+        for provider_name in ("chatgpt", "openai"):
+            with self.subTest(provider=provider_name):
+                status, output, error, opener = self.run_main(
+                    [
+                        "--provider",
+                        provider_name,
+                        "-p",
+                        "-j",
+                        "-q",
+                        "Refund?",
+                        "message",
+                    ],
+                    response=chatgpt_predicate_response(),
+                    environ={"OPENAI_API_KEY": "openai-key"},
+                )
+                self.assertEqual((status, output, error), (0, '{"noul":0.93}\n', ""))
+                request = opener.calls[0][0]
+                requests.append((request.full_url, request.data, request.headers))
+        self.assertEqual(requests[0], requests[1])
+
     def test_chatgpt_choice_translates_request_and_probabilities(self):
         status, output, error, opener = self.run_main(
             [
@@ -671,6 +693,77 @@ class JevqTests(unittest.TestCase):
                 self.assertEqual((status, output), (5, ""))
                 self.assertEqual(parsed["error"]["code"], code)
                 self.assertEqual(parsed["error"]["details"]["status"], http_status)
+
+    def test_chatgpt_credit_balance_error_is_not_reported_as_rate_limit(self):
+        body = json.dumps(
+            {
+                "error": {
+                    "message": "This untrusted provider message is not echoed.",
+                    "type": "insufficient_quota",
+                    "code": "credit_balance_exhausted",
+                }
+            }
+        ).encode("utf-8")
+        failure = urllib.error.HTTPError(
+            jevq.CHATGPT_PROVIDER.api_url,
+            429,
+            "failed",
+            {},
+            io.BytesIO(body),
+        )
+        status, output, error, _ = self.run_main(
+            ["--provider", "openai", "-p", "-j", "-q", "Q", "state"],
+            opener=RecordingOpener(error=failure),
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        parsed = json.loads(error)
+        self.assertEqual((status, output), (5, ""))
+        self.assertEqual(parsed["error"]["code"], "credit_balance_exhausted")
+        self.assertEqual(
+            parsed["error"]["message"],
+            "ChatGPT Decisions API credit balance exhausted",
+        )
+        self.assertEqual(
+            parsed["error"]["details"],
+            {"status": 429, "provider_code": "credit_balance_exhausted"},
+        )
+        self.assertNotIn("untrusted provider message", error)
+
+    def test_chatgpt_known_429_codes_and_unknown_fallback(self):
+        cases = (
+            ("organization_spend_limit_exceeded", "organization spend limit exceeded"),
+            ("project_spend_limit_exceeded", "project spend limit exceeded"),
+            ("organization_usage_limit_exceeded", "organization usage limit exceeded"),
+            ("slow_down", "requested a slower request rate"),
+            ("unknown_future_code", "rate limit exceeded"),
+            (["invalid", "code"], "rate limit exceeded"),
+        )
+        for provider_code, message_fragment in cases:
+            with self.subTest(provider_code=provider_code):
+                response = FakeResponse(
+                    {
+                        "error": {
+                            "type": "rate_limit_error",
+                            "code": provider_code,
+                        }
+                    },
+                    status=429,
+                )
+                status, output, error, _ = self.run_main(
+                    ["--provider", "chatgpt", "-p", "-j", "-q", "Q", "state"],
+                    opener=RecordingOpener(response),
+                    environ={"OPENAI_API_KEY": "openai-key"},
+                )
+                parsed = json.loads(error)
+                self.assertEqual((status, output), (5, ""))
+                self.assertIn(message_fragment, parsed["error"]["message"])
+                expected_code = (
+                    "rate_limited"
+                    if provider_code in ("unknown_future_code", ["invalid", "code"])
+                    else provider_code
+                )
+                self.assertEqual(parsed["error"]["code"], expected_code)
+                self.assertTrue(response.closed)
 
     def test_vercel_errors_name_the_selected_provider(self):
         failure = urllib.error.HTTPError(

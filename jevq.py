@@ -113,6 +113,7 @@ PROVIDERS = {
         CHATGPT_PROVIDER,
     )
 }
+PROVIDERS["openai"] = CHATGPT_PROVIDER
 
 # Backwards-compatible names for callers that imported the original constants.
 API_URL = TYPESAFE_PROVIDER.api_url
@@ -335,7 +336,47 @@ def build_payload(config: CliConfig, state: str) -> dict[str, Any]:
     }
 
 
-def _http_error(status: int, provider: ProviderProfile) -> JevqError:
+OPENAI_429_ERRORS = {
+    "credit_balance_exhausted": "credit balance exhausted",
+    "organization_spend_limit_exceeded": "organization spend limit exceeded",
+    "project_spend_limit_exceeded": "project spend limit exceeded",
+    "organization_usage_limit_exceeded": "organization usage limit exceeded",
+    "slow_down": "requested a slower request rate",
+    "insufficient_quota": "API quota exhausted",
+}
+
+
+def _openai_429_error(
+    body: bytes, provider: ProviderProfile
+) -> JevqError | None:
+    if provider.wire_protocol != "openai_decisions" or not body:
+        return None
+    try:
+        document = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, dict) or not isinstance(document.get("error"), dict):
+        return None
+
+    error = document["error"]
+    provider_code = error.get("code")
+    if not isinstance(provider_code, str) or provider_code not in OPENAI_429_ERRORS:
+        provider_code = error.get("type")
+    if not isinstance(provider_code, str) or provider_code not in OPENAI_429_ERRORS:
+        return None
+
+    details = {"status": 429, "provider_code": provider_code}
+    return JevqError(
+        provider_code,
+        f"{provider.display_name} {OPENAI_429_ERRORS[provider_code]}",
+        5,
+        details,
+    )
+
+
+def _http_error(
+    status: int, provider: ProviderProfile, body: bytes = b""
+) -> JevqError:
     details = {"status": status}
     if status in (401, 403):
         return JevqError(
@@ -345,6 +386,9 @@ def _http_error(status: int, provider: ProviderProfile) -> JevqError:
             details,
         )
     if status == 429:
+        openai_error = _openai_429_error(body, provider)
+        if openai_error is not None:
+            return openai_error
         return JevqError(
             "rate_limited",
             f"{provider.display_name} rate limit exceeded",
@@ -375,12 +419,15 @@ def _read_response(response: Any) -> bytes:
             close()
 
 
-def _discard_error_body(response: Any) -> None:
+def _read_error_body(response: Any) -> bytes:
     try:
         try:
-            response.read(ERROR_BODY_LIMIT + 1)
+            body = response.read(ERROR_BODY_LIMIT + 1)
         except OSError:
-            pass
+            return b""
+        if len(body) > ERROR_BODY_LIMIT:
+            return b""
+        return body
     finally:
         close = getattr(response, "close", None)
         if close is not None:
@@ -412,12 +459,12 @@ def call_api(
         if status is None and hasattr(response, "getcode"):
             status = response.getcode()
         if status is not None and not 200 <= int(status) < 300:
-            _discard_error_body(response)
-            raise _http_error(int(status), provider)
+            error_body = _read_error_body(response)
+            raise _http_error(int(status), provider, error_body)
         response_body = _read_response(response)
     except urllib.error.HTTPError as error:
-        _discard_error_body(error)
-        raise _http_error(error.code, provider) from None
+        error_body = _read_error_body(error)
+        raise _http_error(error.code, provider, error_body) from None
     except urllib.error.URLError as error:
         if isinstance(error.reason, (socket.timeout, TimeoutError)):
             raise JevqError(

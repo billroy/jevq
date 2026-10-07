@@ -29,6 +29,7 @@ Use the decision API selected by `--provider`:
 | `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
 | `jeff` | `POST http://localhost:8765/v1/systemone` | `jeff-latest` | optional `JEFF_API_KEY` |
 | `chatgpt` | `POST https://api.openai.com/v1/decisions` | `gpt-6-luna` | `OPENAI_API_KEY` |
+| `openai` | Exact synonym for `chatgpt` | `gpt-6-luna` | `OPENAI_API_KEY` |
 
 - authentication: `Authorization: Bearer <provider credential>` for TypeSafe,
   Vercel, and ChatGPT, and for Jeff only when `JEFF_API_KEY` is set
@@ -80,7 +81,7 @@ complete mapping is documented in
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt,openai}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -101,7 +102,7 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `--provider {typesafe,vercel,jeff,chatgpt}` | no | API provider; defaults to `typesafe` |
+| `--provider {typesafe,vercel,jeff,chatgpt,openai}` | no | API provider; `openai` is an exact synonym for `chatgpt`; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
@@ -168,10 +169,10 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 The selected provider must have any required non-blank credential. TypeSafe
 reads `TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back
 to `VERCEL_OIDC_TOKEN`. Jeff optionally reads `JEFF_API_KEY`; no Authorization
-header is sent when it is absent. ChatGPT reads `OPENAI_API_KEY`. A missing or
-blank required credential is a configuration error detected before any network
-request. Credentials must never appear in output, error details, tracebacks,
-or logs.
+header is sent when it is absent. ChatGPT and its `openai` synonym read
+`OPENAI_API_KEY`. A missing or blank required credential is a configuration
+error detected before any network request. Credentials must never appear in
+output, error details, tracebacks, or logs.
 
 The first version has no command-line API-key option. This avoids leaking credentials through shell history and process listings.
 
@@ -257,7 +258,8 @@ Suggested HTTP mappings:
 
 - 401 or 403: `authentication_error`
 - 400 or 422: `invalid_request`
-- 429: `rate_limited`
+- 429: `rate_limited`, except that recognized OpenAI billing, spend, usage, and
+  ramp-rate codes are reported specifically
 - 503: `not_ready`
 - 529: `busy`
 - other non-2xx responses: `api_error`
