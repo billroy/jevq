@@ -86,6 +86,53 @@ def score_response(value=1.7):
     }
 
 
+def chatgpt_predicate_response(value=0.93):
+    return {
+        "answers": [
+            {
+                "type": "predicate",
+                "name": "question",
+                "probability": value,
+            }
+        ]
+    }
+
+
+def chatgpt_choice_response():
+    return {
+        "answers": [
+            {
+                "type": "choice",
+                "name": "question",
+                "choice": "Heaven",
+                "confidence": 0.8,
+                "probabilities": [
+                    {"value": "Hell", "probability": 0.1},
+                    {"value": "Heaven", "probability": 0.9},
+                ],
+            }
+        ]
+    }
+
+
+def chatgpt_score_response(value=1.7):
+    return {
+        "answers": [
+            {
+                "type": "score",
+                "name": "question",
+                "score": value,
+                "confidence": 0.8,
+                "probabilities": [
+                    {"value": 2, "label": "hostile", "probability": 0.8},
+                    {"value": 0, "label": "calm", "probability": 0.1},
+                    {"value": 1, "label": "annoyed", "probability": 0.1},
+                ],
+            }
+        ]
+    }
+
+
 class JevqTests(unittest.TestCase):
     def run_main(
         self,
@@ -265,6 +312,209 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].get_header("Authorization"), "Bearer jeff-key"
         )
 
+    def test_chatgpt_predicate_translates_noul_request_and_response(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "chatgpt", "-p", "-j", "-q", "Refund?", "message"],
+            response=chatgpt_predicate_response(),
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        self.assertEqual((status, output, error), (0, '{"noul":0.93}\n', ""))
+        request, timeout = opener.calls[0]
+        self.assertEqual(request.full_url, "https://api.openai.com/v1/decisions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer openai-key")
+        self.assertEqual(timeout, jevq.REQUEST_TIMEOUT_SECONDS)
+        self.assertEqual(
+            json.loads(request.data),
+            {
+                "model": "gpt-6-luna",
+                "input": "message",
+                "questions": [
+                    {
+                        "type": "predicate",
+                        "name": "question",
+                        "instructions": "Refund?",
+                    }
+                ],
+            },
+        )
+
+    def test_chatgpt_choice_translates_request_and_probabilities(self):
+        status, output, error, opener = self.run_main(
+            [
+                "--provider",
+                "chatgpt",
+                "-c",
+                "Heaven,Hell",
+                "-j",
+                "-q",
+                "Destination?",
+                "person",
+            ],
+            response=chatgpt_choice_response(),
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(error, "")
+        self.assertEqual(
+            json.loads(output),
+            {
+                "choice": "Heaven",
+                "probabilities": {"Heaven": 0.9, "Hell": 0.1},
+                "confidence": 0.8,
+            },
+        )
+        payload = json.loads(opener.calls[0][0].data)
+        self.assertEqual(
+            payload["questions"][0],
+            {
+                "type": "choice",
+                "name": "question",
+                "instructions": "Destination?",
+                "choices": [{"value": "Heaven"}, {"value": "Hell"}],
+            },
+        )
+
+    def test_chatgpt_score_translates_request_and_validates_distribution(self):
+        status, output, error, opener = self.run_main(
+            [
+                "--provider",
+                "chatgpt",
+                "-s",
+                "--criteria",
+                "calm,annoyed,hostile",
+                "-q",
+                "Hostility?",
+                "message",
+            ],
+            response=chatgpt_score_response(),
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        self.assertEqual((status, output, error), (0, "1.7\n", ""))
+        payload = json.loads(opener.calls[0][0].data)
+        self.assertEqual(
+            payload["questions"][0],
+            {
+                "type": "score",
+                "name": "question",
+                "instructions": "Hostility?",
+                "levels": [
+                    {"label": "calm"},
+                    {"label": "annoyed"},
+                    {"label": "hostile"},
+                ],
+            },
+        )
+
+    def test_chatgpt_model_override_and_missing_credentials(self):
+        _, _, _, opener = self.run_main(
+            [
+                "--provider",
+                "chatgpt",
+                "-p",
+                "-m",
+                "gpt-6-luna-pinned",
+                "-q",
+                "Q",
+                "state",
+            ],
+            response=chatgpt_predicate_response(),
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        self.assertEqual(
+            json.loads(opener.calls[0][0].data)["model"], "gpt-6-luna-pinned"
+        )
+
+        for environ in ({}, {"OPENAI_API_KEY": " \t"}):
+            with self.subTest(environ=environ):
+                status, output, error, opener = self.run_main(
+                    ["--provider", "chatgpt", "-p", "-q", "Q", "state"],
+                    environ=environ,
+                )
+                self.assertEqual((status, output), (3, ""))
+                self.assertIn("OPENAI_API_KEY", error)
+                self.assertEqual(opener.calls, [])
+
+    def test_chatgpt_refusal_is_reported_as_a_refusal(self):
+        status, output, error, _ = self.run_main(
+            ["--provider", "chatgpt", "-p", "-j", "-q", "Q", "state"],
+            response={"answers": [{"type": "refusal", "name": "question"}]},
+            environ={"OPENAI_API_KEY": "openai-key"},
+        )
+        self.assertEqual((status, output), (6, ""))
+        self.assertEqual(json.loads(error)["error"]["code"], "refusal")
+
+    def test_chatgpt_rejects_malformed_answer_envelopes_and_distributions(self):
+        cases = [
+            ({"answers": {}}, ["-p"]),
+            ({"answers": []}, ["-p"]),
+            (chatgpt_predicate_response(), ["-c", "Heaven,Hell"]),
+            (
+                {
+                    "answers": [
+                        {
+                            "type": "predicate",
+                            "name": "other",
+                            "probability": 0.5,
+                        }
+                    ]
+                },
+                ["-p"],
+            ),
+            (
+                {
+                    "answers": [
+                        {
+                            "type": "choice",
+                            "name": "question",
+                            "choice": "Heaven",
+                            "confidence": 0.8,
+                            "probabilities": [
+                                {"value": "Heaven", "probability": 0.9},
+                                {"value": "Heaven", "probability": 0.1},
+                            ],
+                        }
+                    ]
+                },
+                ["-c", "Heaven,Hell"],
+            ),
+            (
+                {
+                    "answers": [
+                        {
+                            "type": "score",
+                            "name": "question",
+                            "score": 1,
+                            "confidence": 0.8,
+                            "probabilities": [
+                                {"value": 0, "label": "calm", "probability": 0.5},
+                                {"value": 1, "label": "hostile", "probability": 0.5},
+                            ],
+                        }
+                    ]
+                },
+                ["-s", "--criteria", "calm,annoyed"],
+            ),
+        ]
+        for response, mode_args in cases:
+            with self.subTest(response=response, mode_args=mode_args):
+                status, output, error, _ = self.run_main(
+                    [
+                        "--provider",
+                        "chatgpt",
+                        *mode_args,
+                        "-j",
+                        "-q",
+                        "Q",
+                        "state",
+                    ],
+                    response=response,
+                    environ={"OPENAI_API_KEY": "openai-key"},
+                )
+                self.assertEqual((status, output), (6, ""))
+                self.assertEqual(
+                    json.loads(error)["error"]["code"], "response_error"
+                )
+
     def test_unicode_is_sent_as_utf8(self):
         _, _, _, opener = self.run_main(
             ["-p", "-q", "¿Está bien?", "café", "☕"], response=noul_response()
@@ -395,6 +645,7 @@ class JevqTests(unittest.TestCase):
 
     def test_http_error_mappings(self):
         cases = (
+            (400, "invalid_request"),
             (401, "authentication_error"),
             (403, "authentication_error"),
             (422, "invalid_request"),

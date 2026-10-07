@@ -71,6 +71,7 @@ class ProviderProfile:
     default_model: str
     credential_envs: tuple[str, ...]
     credential_required: bool = True
+    wire_protocol: str = "systemone"
 
 
 TYPESAFE_PROVIDER = ProviderProfile(
@@ -95,9 +96,22 @@ JEFF_PROVIDER = ProviderProfile(
     credential_envs=("JEFF_API_KEY",),
     credential_required=False,
 )
+CHATGPT_PROVIDER = ProviderProfile(
+    key="chatgpt",
+    display_name="ChatGPT Decisions API",
+    api_url="https://api.openai.com/v1/decisions",
+    default_model="gpt-6-luna",
+    credential_envs=("OPENAI_API_KEY",),
+    wire_protocol="openai_decisions",
+)
 PROVIDERS = {
     provider.key: provider
-    for provider in (TYPESAFE_PROVIDER, VERCEL_PROVIDER, JEFF_PROVIDER)
+    for provider in (
+        TYPESAFE_PROVIDER,
+        VERCEL_PROVIDER,
+        JEFF_PROVIDER,
+        CHATGPT_PROVIDER,
+    )
 }
 
 # Backwards-compatible names for callers that imported the original constants.
@@ -155,7 +169,7 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
         help="API provider (default: typesafe)",
     )
     parser.add_argument(
-        "-m", "--model", help="model name (defaults to the provider's Jev model)"
+        "-m", "--model", help="model name (defaults to the provider's model)"
     )
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON output")
     parser.add_argument("--criteria", help="comma-separated ordered levels for score mode")
@@ -288,6 +302,23 @@ def load_api_key(
 
 
 def build_payload(config: CliConfig, state: str) -> dict[str, Any]:
+    if config.provider.wire_protocol == "openai_decisions":
+        question: dict[str, Any] = {
+            "type": "predicate" if config.mode == "noul" else config.mode,
+            "name": QUESTION_ID,
+            "instructions": config.question,
+        }
+        if config.mode == "choice":
+            question["choices"] = [{"value": label} for label in config.labels]
+        elif config.mode == "score":
+            question["levels"] = [{"label": label} for label in config.labels]
+
+        return {
+            "model": config.model,
+            "input": state,
+            "questions": [question],
+        }
+
     question: dict[str, Any] = {
         "type": config.mode,
         "instructions": config.question,
@@ -320,7 +351,7 @@ def _http_error(status: int, provider: ProviderProfile) -> JevqError:
             5,
             details,
         )
-    if status == 422:
+    if status in (400, 422):
         return JevqError(
             "invalid_request", f"{provider.display_name} rejected the request", 5, details
         )
@@ -434,12 +465,170 @@ def _probability(
     return value
 
 
+def _openai_probabilities(
+    value: Any,
+    labels: Sequence[str],
+    provider: ProviderProfile,
+) -> dict[str, float | int]:
+    if not isinstance(value, list) or len(value) != len(labels):
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response has invalid choice probabilities",
+            6,
+        )
+
+    probabilities: dict[str, float | int] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            raise JevqError(
+                "response_error",
+                f"{provider.display_name} response has invalid choice probabilities",
+                6,
+            )
+        label = item.get("value")
+        if not isinstance(label, str) or label not in labels or label in probabilities:
+            raise JevqError(
+                "response_error",
+                f"{provider.display_name} response has invalid choice probabilities",
+                6,
+            )
+        probabilities[label] = _probability(
+            item.get("probability"), f"probability for {label!r}", provider
+        )
+
+    if set(probabilities) != set(labels):
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response has invalid choice probabilities",
+            6,
+        )
+    return {label: probabilities[label] for label in labels}
+
+
+def _validate_openai_score_probabilities(
+    value: Any,
+    labels: Sequence[str],
+    provider: ProviderProfile,
+) -> None:
+    if not isinstance(value, list) or len(value) != len(labels):
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response has invalid score probabilities",
+            6,
+        )
+
+    seen: set[int] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise JevqError(
+                "response_error",
+                f"{provider.display_name} response has invalid score probabilities",
+                6,
+            )
+        index = item.get("value")
+        label = item.get("label")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or not 0 <= index < len(labels)
+            or index in seen
+            or label != labels[index]
+        ):
+            raise JevqError(
+                "response_error",
+                f"{provider.display_name} response has invalid score probabilities",
+                6,
+            )
+        _probability(
+            item.get("probability"), f"score probability {index!r}", provider
+        )
+        seen.add(index)
+
+    if seen != set(range(len(labels))):
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response has invalid score probabilities",
+            6,
+        )
+
+
+def _extract_openai_answer(
+    document: Any,
+    mode: str,
+    labels: Sequence[str],
+    provider: ProviderProfile,
+) -> dict[str, Any]:
+    if not isinstance(document, dict):
+        raise JevqError(
+            "response_error", f"{provider.display_name} response must be an object", 6
+        )
+    answers = document.get("answers")
+    if not isinstance(answers, list) or len(answers) != 1:
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response must contain one answer",
+            6,
+        )
+    answer = answers[0]
+    if not isinstance(answer, dict) or answer.get("name") != QUESTION_ID:
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response is missing answer named {QUESTION_ID!r}",
+            6,
+        )
+    if answer.get("type") == "refusal":
+        raise JevqError(
+            "refusal", f"{provider.display_name} refused the question", 6
+        )
+
+    expected_type = "predicate" if mode == "noul" else mode
+    if answer.get("type") != expected_type:
+        raise JevqError(
+            "response_error",
+            f"{provider.display_name} response has the wrong answer type",
+            6,
+        )
+    if mode == "noul":
+        return {
+            "noul": _probability(answer.get("probability"), "probability", provider)
+        }
+    if mode == "choice":
+        choice = answer.get("choice")
+        if not isinstance(choice, str) or choice not in labels:
+            raise JevqError(
+                "response_error",
+                f"{provider.display_name} response has an invalid choice",
+                6,
+            )
+        confidence = _probability(answer.get("confidence"), "confidence", provider)
+        probabilities = _openai_probabilities(
+            answer.get("probabilities"), labels, provider
+        )
+        return {
+            "choice": choice,
+            "probabilities": probabilities,
+            "confidence": confidence,
+        }
+
+    score = answer.get("score")
+    if not _is_finite_number(score) or score < 0 or score > len(labels) - 1:
+        raise JevqError(
+            "response_error", f"{provider.display_name} response has an invalid score", 6
+        )
+    _probability(answer.get("confidence"), "confidence", provider)
+    _validate_openai_score_probabilities(answer.get("probabilities"), labels, provider)
+    return {"score": score}
+
+
 def extract_answer(
     document: Any,
     mode: str,
     labels: Sequence[str],
     provider: ProviderProfile = TYPESAFE_PROVIDER,
 ) -> dict[str, Any]:
+    if provider.wire_protocol == "openai_decisions":
+        return _extract_openai_answer(document, mode, labels, provider)
+
     if not isinstance(document, dict):
         raise JevqError(
             "response_error", f"{provider.display_name} response must be an object", 6

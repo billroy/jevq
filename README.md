@@ -1,8 +1,8 @@
 # jevq
 
 `jevq` asks one Choice, Noul, or Score question using Jev's TypeSafe-compatible
-System One API. It supports TypeSafe directly, Vercel AI Gateway, and a local
-Jeff server.
+System One API. It supports TypeSafe directly, Vercel AI Gateway, a local Jeff
+server, and ChatGPT's Decisions API through a compatibility adapter.
 
 It requires Python 3.10 or newer and uses only the Python standard library.
 TypeSafe is the default provider and reads `TYPESAFE_API_KEY`.
@@ -29,6 +29,22 @@ python3 jevq.py --provider vercel -p -q "Does this ask for a refund?" < message.
 ```
 
 An explicit `--model` overrides the selected provider's default model.
+
+## ChatGPT Decisions API
+
+Select ChatGPT with `--provider chatgpt`. The provider reads `OPENAI_API_KEY`,
+calls `https://api.openai.com/v1/decisions`, and defaults to `gpt-6-luna`.
+
+```shell
+export OPENAI_API_KEY="your_openai_api_key"
+python3 jevq.py --provider chatgpt -p \
+  -q "Does this ask for a refund?" < message.txt
+```
+
+Jevq translates ChatGPT's incompatible `predicate` terminology and array-based
+wire format back to the existing Jev CLI and output contract. See the
+[protocol comparison](docs/chatgpt-protocol-diff.md) for the full catalog of
+otherwise gratuitous differences.
 
 ## Jeff
 
@@ -80,9 +96,12 @@ jevq -c Heaven,Hell -q "Where should this one go?" Frank Sinatra
 | 3 | Missing or invalid provider credentials |
 | 4 | Network, timeout, TLS, or DNS failure |
 | 5 | Non-success provider HTTP response |
-| 6 | Malformed or unexpected successful provider response |
+| 6 | Missing, refused, malformed, or unexpected successful provider answer |
 
-With `--json`, errors use the same return codes and are emitted as JSON with an `error.code` such as `usage_error`, `configuration_error`, `timeout`, `authentication_error`, `rate_limited`, `api_error`, or `response_error`.
+With `--json`, errors use the same return codes and are emitted as JSON with an
+`error.code` such as `usage_error`, `configuration_error`, `timeout`,
+`authentication_error`, `rate_limited`, `api_error`, `response_error`, or
+`refusal`.
 
 See [the specification](docs/spec.md) for the complete interface and [the implementation plan](docs/implementation-plan.md) for design details.
 

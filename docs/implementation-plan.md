@@ -54,9 +54,9 @@ Planned functions and responsibilities:
 | `parse_labels(value, option_name)` | Split, trim, and validate choices or score criteria while preserving order. |
 | `read_state(text_parts, stdin)` | Apply positional-over-stdin precedence without accidentally blocking on a terminal. |
 | `load_api_key(environ, provider)` | Resolve the selected provider's credential variables without exposing their values. |
-| `build_payload(config, state)` | Produce the exact `model`/`state`/`questions` request document. |
+| `build_payload(config, state)` | Produce the selected provider's exact request document, including ChatGPT's incompatible `input` and array-based question schema. |
 | `call_api(payload, api_key, opener, provider=...)` | Serialize UTF-8 JSON, POST to the selected provider with a 30-second timeout, and translate transport/HTTP failures. |
-| `extract_answer(document, mode, labels)` | Validate the response envelope and typed answer before returning the reduced result. |
+| `extract_answer(document, mode, labels)` | Dispatch to the provider wire codec, validate the response envelope and typed answer, then normalize it to the Jev CLI result. |
 | `write_success(answer, mode, json_mode, stdout)` | Emit either the bare result or the documented compact JSON object. |
 | `write_error(error, json_mode, stderr)` | Emit one sanitized plain-text or JSON diagnostic. |
 | `main(argv, environ, stdin, stdout, stderr, opener)` | Orchestrate the command and return the documented exit status. |

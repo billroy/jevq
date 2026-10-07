@@ -21,21 +21,22 @@ arbitrary/custom providers, and local caching are out of scope.
 
 ## 2. External API contract
 
-Use the TypeSafe-compatible API selected by `--provider`:
+Use the decision API selected by `--provider`:
 
 | Provider | Endpoint | Default model | Credentials |
 | --- | --- | --- | --- |
 | `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
 | `jeff` | `POST http://localhost:8765/v1/systemone` | `jeff-latest` | optional `JEFF_API_KEY` |
+| `chatgpt` | `POST https://api.openai.com/v1/decisions` | `gpt-6-luna` | `OPENAI_API_KEY` |
 
-- authentication: `Authorization: Bearer <provider credential>` for TypeSafe
-  and Vercel, and for Jeff only when `JEFF_API_KEY` is set
+- authentication: `Authorization: Bearer <provider credential>` for TypeSafe,
+  Vercel, and ChatGPT, and for Jeff only when `JEFF_API_KEY` is set
 - content type: `application/json`
 - model: the value of `--model`, or the selected provider's default
 - question ID: `question`
 
-The request body has this common shape:
+The TypeSafe-compatible System One providers use this request shape:
 
 ```json
 {
@@ -50,7 +51,7 @@ The request body has this common shape:
 }
 ```
 
-The question object changes by mode:
+The System One question object changes by mode:
 
 | Mode | API `type` | Additional request field |
 | --- | --- | --- |
@@ -60,18 +61,26 @@ The question object changes by mode:
 
 For choice mode, a bare CLI choice label is sent with a JSON `null` description. For example, `--choices Heaven,Hell` becomes `"criteria": {"Heaven": null, "Hell": null}`. Choice order must be preserved in the serialized request even though semantic selection does not depend on it.
 
-The client must use the answer at `answers.question`. A successful HTTP response that is not JSON, has no `answers.question`, or contains an answer type different from the requested type is a response-schema error rather than a successful invocation.
+For System One providers, the client must use the answer at
+`answers.question`. ChatGPT's provider codec instead validates the sole entry
+in its `answers` array and requires its `name` to be `question`. A successful
+HTTP response that does not contain the requested typed answer is a
+response-schema error rather than a successful invocation.
 
 The API references used to plan implementation are the
 [official TypeSafe OpenAPI document](https://api.typesafe.ai/openapi.json) and
 [Vercel's TypeSafe-compatible API documentation](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe).
 The implementation groups endpoint, default model, credential variables, and
 display name into provider profiles so API changes are easy to accommodate.
+ChatGPT uses a provider-specific codec because its semantically compatible API
+gratuitously renames and reshapes most of the System One wire protocol. The
+complete mapping is documented in
+[chatgpt-protocol-diff.md](chatgpt-protocol-diff.md).
 
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -92,7 +101,7 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `--provider {typesafe,vercel,jeff}` | no | API provider; defaults to `typesafe` |
+| `--provider {typesafe,vercel,jeff,chatgpt}` | no | API provider; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
@@ -159,9 +168,10 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 The selected provider must have any required non-blank credential. TypeSafe
 reads `TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back
 to `VERCEL_OIDC_TOKEN`. Jeff optionally reads `JEFF_API_KEY`; no Authorization
-header is sent when it is absent. A missing or blank required credential is a
-configuration error detected before any network request. Credentials must never appear in output,
-error details, tracebacks, or logs.
+header is sent when it is absent. ChatGPT reads `OPENAI_API_KEY`. A missing or
+blank required credential is a configuration error detected before any network
+request. Credentials must never appear in output, error details, tracebacks,
+or logs.
 
 The first version has no command-line API-key option. This avoids leaking credentials through shell history and process listings.
 
@@ -241,12 +251,12 @@ Exit statuses:
 | 3 | missing or invalid local configuration | `configuration_error` |
 | 4 | network, timeout, TLS, or DNS failure | `network_error`, `timeout` |
 | 5 | non-success HTTP response | `authentication_error`, `invalid_request`, `not_ready`, `busy`, `rate_limited`, `api_error` |
-| 6 | malformed or unexpected success response | `response_error` |
+| 6 | no usable answer in a successful response | `response_error`, `refusal` |
 
 Suggested HTTP mappings:
 
 - 401 or 403: `authentication_error`
-- 422: `invalid_request`
+- 400 or 422: `invalid_request`
 - 429: `rate_limited`
 - 503: `not_ready`
 - 529: `busy`
