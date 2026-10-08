@@ -11,6 +11,7 @@ import re
 import socket
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence, TextIO
@@ -123,6 +124,7 @@ DEFAULT_MODEL = TYPESAFE_PROVIDER.default_model
 @dataclass(frozen=True)
 class CliConfig:
     provider: ProviderProfile
+    api_url: str
     mode: str
     question: str
     model: str
@@ -172,10 +174,41 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
     parser.add_argument(
         "-m", "--model", help="model name (defaults to the provider's model)"
     )
+    parser.add_argument(
+        "--port",
+        type=parse_port,
+        help="localhost port for the Jeff provider (default: 8765)",
+    )
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON output")
     parser.add_argument("--criteria", help="comma-separated ordered levels for score mode")
     parser.add_argument("text", nargs="*", metavar="TEXT", help="state text")
     return parser
+
+
+def parse_port(value: str) -> int:
+    try:
+        port = int(value, 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError("port must be an integer") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
+def api_url_with_port(api_url: str, port: int) -> str:
+    parsed = urllib.parse.urlsplit(api_url)
+    netloc = parsed.hostname or ""
+    if ":" in netloc and not netloc.startswith("["):
+        netloc = f"[{netloc}]"
+    if parsed.username is not None:
+        userinfo = urllib.parse.quote(parsed.username, safe="")
+        if parsed.password is not None:
+            userinfo += ":" + urllib.parse.quote(parsed.password, safe="")
+        netloc = f"{userinfo}@{netloc}"
+    netloc = f"{netloc}:{port}"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def parse_labels(value: str, option_name: str) -> tuple[str, ...]:
@@ -216,6 +249,13 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
     args = make_parser(output).parse_args(list(argv))
 
     provider = PROVIDERS[args.provider]
+    if args.port is not None and provider is not JEFF_PROVIDER:
+        raise JevqError("usage_error", "--port is valid only with --provider jeff", 2)
+    api_url = (
+        api_url_with_port(provider.api_url, args.port)
+        if args.port is not None
+        else provider.api_url
+    )
     mode = "choice" if args.choices is not None else args.mode
     model = provider.default_model if args.model is None else args.model
 
@@ -261,6 +301,7 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
 
     return CliConfig(
         provider=provider,
+        api_url=api_url,
         mode=mode,
         question=args.question,
         model=model,
@@ -440,13 +481,14 @@ def call_api(
     opener: Callable[..., Any] | None = None,
     *,
     provider: ProviderProfile = TYPESAFE_PROVIDER,
+    api_url: str | None = None,
 ) -> Any:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if api_key is not None:
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
-        provider.api_url,
+        provider.api_url if api_url is None else api_url,
         data=body,
         headers=headers,
         method="POST",
@@ -836,7 +878,9 @@ def main(
         state = read_state(config.text_parts, input_stream)
         api_key = load_api_key(environment, config.provider)
         payload = build_payload(config, state)
-        document = call_api(payload, api_key, opener, provider=config.provider)
+        document = call_api(
+            payload, api_key, opener, provider=config.provider, api_url=config.api_url
+        )
         answer = extract_answer(
             document, config.mode, config.labels, provider=config.provider
         )

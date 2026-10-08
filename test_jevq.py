@@ -312,6 +312,37 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].get_header("Authorization"), "Bearer jeff-key"
         )
 
+    def test_jeff_provider_accepts_custom_port(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "jeff", "--port", "9876", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        self.assertEqual(
+            opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
+        )
+
+    def test_port_is_valid_only_for_jeff_provider(self):
+        status, output, error, opener = self.run_main(
+            ["--port", "9876", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+        )
+        self.assertEqual((status, output), (2, ""))
+        self.assertIn("only with --provider jeff", error)
+        self.assertEqual(opener.calls, [])
+
+    def test_port_must_be_valid_tcp_port(self):
+        for value in ("0", "65536", "abc"):
+            with self.subTest(value=value):
+                status, output, error, opener = self.run_main(
+                    ["--provider", "jeff", "--port", value, "-p", "-q", "Q", "state"],
+                    environ={},
+                )
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn("port must", error)
+                self.assertEqual(opener.calls, [])
+
     def test_chatgpt_predicate_translates_noul_request_and_response(self):
         status, output, error, opener = self.run_main(
             ["--provider", "chatgpt", "-p", "-j", "-q", "Refund?", "message"],
