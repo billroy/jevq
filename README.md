@@ -50,7 +50,8 @@ otherwise gratuitous differences.
 ## Jeff
 
 Start `jeff-serve` as described in the [Jeff getting-started guide](https://jeffhub.ai/docs/getting-started),
-then select it with `--provider jeff`. The provider calls
+then select it with `--provider jeff` or its exact synonym `--provider d1`.
+The provider calls
 `http://localhost:8765/v1/systemone`, defaults to `jeff-latest`, and does not
 require credentials unless the server has authentication enabled. Set
 `JEFF_API_KEY` when it does. Pass `--port` if your local Jeff server is
@@ -59,6 +60,7 @@ listening on a different localhost port.
 ```shell
 python3 jevq.py --provider jeff -p -q "Does this ask for a refund?" < message.txt
 python3 jevq.py --provider jeff --port 9876 -p -q "Does this ask for a refund?" < message.txt
+python3 jevq.py --provider d1 -p -q "Does this ask for a refund?" < message.txt
 python3 jevq.py --provider jeff -c refunds,deliveries -m support-intents \
   -q "Which team should handle this?" < message.txt
 ```

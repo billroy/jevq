@@ -37,6 +37,7 @@ Provider profiles:
 - `typesafe`: `https://api.typesafe.ai/v1/systemone`, `jev-latest`, and `TYPESAFE_API_KEY`
 - `vercel`: `https://ai-gateway.vercel.sh/typesafe/v1/systemone`, `typesafe-ai/jev`, and `AI_GATEWAY_API_KEY`/`VERCEL_OIDC_TOKEN`
 - `jeff`: `http://localhost:8765/v1/systemone`, `jeff-latest`, and optional `JEFF_API_KEY`
+- `d1`: exact synonym for `jeff`
 
 Common constants:
 

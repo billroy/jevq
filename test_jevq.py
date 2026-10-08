@@ -323,6 +323,29 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
         )
 
+    def test_d1_provider_is_jeff_synonym(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "d1", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        request, _ = opener.calls[0]
+        self.assertEqual(request.full_url, jevq.JEFF_PROVIDER.api_url)
+        self.assertIsNone(request.get_header("Authorization"))
+        self.assertEqual(json.loads(request.data)["model"], "jeff-latest")
+
+    def test_d1_provider_accepts_custom_port(self):
+        status, output, error, opener = self.run_main(
+            ["--provider", "d1", "--port", "9876", "-p", "-q", "Question?", "state"],
+            response=noul_response(),
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        self.assertEqual(
+            opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
+        )
+
     def test_port_is_valid_only_for_jeff_provider(self):
         status, output, error, opener = self.run_main(
             ["--port", "9876", "-p", "-q", "Question?", "state"],
@@ -614,7 +637,7 @@ class JevqTests(unittest.TestCase):
         for value in ("1,two", "+1,two", "1.0,two", ".5,two", "1e2,two"):
             with self.subTest(value=value):
                 status, output, error, opener = self.run_main(
-                    ["--provider", "jeff", "-c", value, "-q", "Q", "state"],
+                    ["--provider", "d1", "-c", value, "-q", "Q", "state"],
                     environ={},
                 )
                 self.assertEqual((status, output), (2, ""))

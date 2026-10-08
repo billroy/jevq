@@ -28,6 +28,7 @@ Use the decision API selected by `--provider`:
 | `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
 | `jeff` | `POST http://localhost:8765/v1/systemone` | `jeff-latest` | optional `JEFF_API_KEY` |
+| `d1` | Exact synonym for `jeff` | `jeff-latest` | optional `JEFF_API_KEY` |
 | `chatgpt` | `POST https://api.openai.com/v1/decisions` | `gpt-6-luna` | `OPENAI_API_KEY` |
 | `openai` | Exact synonym for `chatgpt` | `gpt-6-luna` | `OPENAI_API_KEY` |
 
@@ -81,7 +82,7 @@ complete mapping is documented in
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt,openai}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt,openai,d1}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -102,7 +103,7 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `--provider {typesafe,vercel,jeff,chatgpt,openai}` | no | API provider; `openai` is an exact synonym for `chatgpt`; defaults to `typesafe` |
+| `--provider {typesafe,vercel,jeff,chatgpt,openai,d1}` | no | API provider; `openai` is an exact synonym for `chatgpt`; `d1` is an exact synonym for `jeff`; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |

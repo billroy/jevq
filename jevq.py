@@ -115,6 +115,7 @@ PROVIDERS = {
     )
 }
 PROVIDERS["openai"] = CHATGPT_PROVIDER
+PROVIDERS["d1"] = JEFF_PROVIDER
 
 # Backwards-compatible names for callers that imported the original constants.
 API_URL = TYPESAFE_PROVIDER.api_url
