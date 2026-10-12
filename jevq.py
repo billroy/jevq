@@ -73,6 +73,7 @@ class ProviderProfile:
     credential_envs: tuple[str, ...]
     credential_required: bool = True
     wire_protocol: str = "systemone"
+    local_systemone: bool = False
 
 
 TYPESAFE_PROVIDER = ProviderProfile(
@@ -96,6 +97,25 @@ JEFF_PROVIDER = ProviderProfile(
     default_model="jeff-latest",
     credential_envs=("JEFF_API_KEY",),
     credential_required=False,
+    local_systemone=True,
+)
+D1_PROVIDER = ProviderProfile(
+    key="d1",
+    display_name="D1",
+    api_url="http://localhost:8765/v1/systemone",
+    default_model="LiquidAI/d1-3B-GGUF/d1-3B-Q4_K_M.gguf",
+    credential_envs=("JEFF_API_KEY",),
+    credential_required=False,
+    local_systemone=True,
+)
+CLEF_PROVIDER = ProviderProfile(
+    key="clef",
+    display_name="Clef",
+    api_url="http://localhost:8765/v1/systemone",
+    default_model="bartowski/Cloudflare_clef-GGUF/Cloudflare_clef-Q4_K_S.gguf",
+    credential_envs=("JEFF_API_KEY",),
+    credential_required=False,
+    local_systemone=True,
 )
 CHATGPT_PROVIDER = ProviderProfile(
     key="chatgpt",
@@ -111,11 +131,12 @@ PROVIDERS = {
         TYPESAFE_PROVIDER,
         VERCEL_PROVIDER,
         JEFF_PROVIDER,
+        D1_PROVIDER,
+        CLEF_PROVIDER,
         CHATGPT_PROVIDER,
     )
 }
 PROVIDERS["openai"] = CHATGPT_PROVIDER
-PROVIDERS["d1"] = JEFF_PROVIDER
 
 # Backwards-compatible names for callers that imported the original constants.
 API_URL = TYPESAFE_PROVIDER.api_url
@@ -178,7 +199,7 @@ def make_parser(output: TextIO) -> JevqArgumentParser:
     parser.add_argument(
         "--port",
         type=parse_port,
-        help="localhost port for the Jeff provider (default: 8765)",
+        help="localhost port for a local System One provider (default: 8765)",
     )
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON output")
     parser.add_argument("--criteria", help="comma-separated ordered levels for score mode")
@@ -250,8 +271,12 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
     args = make_parser(output).parse_args(list(argv))
 
     provider = PROVIDERS[args.provider]
-    if args.port is not None and provider is not JEFF_PROVIDER:
-        raise JevqError("usage_error", "--port is valid only with --provider jeff", 2)
+    if args.port is not None and not provider.local_systemone:
+        raise JevqError(
+            "usage_error",
+            "--port is valid only with --provider jeff, d1, or clef",
+            2,
+        )
     api_url = (
         api_url_with_port(provider.api_url, args.port)
         if args.port is not None
@@ -274,7 +299,7 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
             (
                 label
                 for label in labels
-                if provider is JEFF_PROVIDER and NUMBER_LIKE.match(label)
+                if provider.local_systemone and NUMBER_LIKE.match(label)
             ),
             None,
         )
@@ -284,17 +309,21 @@ def parse_cli(argv: Sequence[str], output: TextIO) -> CliConfig:
                 f"choice {number_like!r} is a bare number; use a key such as 'o1' or a short word",
                 2,
             )
-        if provider is JEFF_PROVIDER and len(labels) > 254:
+        if provider.local_systemone and len(labels) > 254:
             raise JevqError(
-                "invalid_input", "Jeff choice questions support at most 254 options", 2
+                "invalid_input",
+                f"{provider.display_name} choice questions support at most 254 options",
+                2,
             )
     elif mode == "score":
         if args.criteria is None:
             raise JevqError("usage_error", "score mode requires --criteria", 2)
         labels = parse_labels(args.criteria, "--criteria")
-        if provider is JEFF_PROVIDER and len(labels) > 10:
+        if provider.local_systemone and len(labels) > 10:
             raise JevqError(
-                "invalid_input", "Jeff score questions support 2 to 10 levels", 2
+                "invalid_input",
+                f"{provider.display_name} score questions support 2 to 10 levels",
+                2,
             )
     else:
         if args.criteria is not None:
@@ -759,10 +788,10 @@ def extract_answer(
                 f"{provider.display_name} response has invalid choice probabilities",
                 6,
             )
-        if provider is JEFF_PROVIDER and set(probabilities) != set(labels):
+        if provider.local_systemone and set(probabilities) != set(labels):
             raise JevqError(
                 "response_error",
-                "Jeff response has invalid choice probabilities",
+                f"{provider.display_name} response has invalid choice probabilities",
                 6,
             )
         for label, probability in probabilities.items():
@@ -790,7 +819,7 @@ def extract_answer(
         )
     _probability(answer.get("confidence"), "confidence", provider)
     legend = answer.get("legend")
-    if (provider is not JEFF_PROVIDER and legend is None) or (
+    if (not provider.local_systemone and legend is None) or (
         legend is not None
         and (
             not isinstance(legend, dict)
@@ -813,11 +842,13 @@ def extract_answer(
             f"{provider.display_name} response has invalid score probabilities",
             6,
         )
-    if provider is JEFF_PROVIDER and set(probabilities) != {
+    if provider.local_systemone and set(probabilities) != {
         str(index) for index in range(len(labels))
     }:
         raise JevqError(
-            "response_error", "Jeff response has invalid score probabilities", 6
+            "response_error",
+            f"{provider.display_name} response has invalid score probabilities",
+            6,
         )
     for level, probability in probabilities.items():
         if not isinstance(level, str):

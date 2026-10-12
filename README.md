@@ -50,17 +50,28 @@ otherwise gratuitous differences.
 ## Jeff
 
 Start `jeff-serve` as described in the [Jeff getting-started guide](https://jeffhub.ai/docs/getting-started),
-then select it with `--provider jeff` or its exact synonym `--provider d1`.
-The provider calls
-`http://localhost:8765/v1/systemone`, defaults to `jeff-latest`, and does not
-require credentials unless the server has authentication enabled. Set
-`JEFF_API_KEY` when it does. Pass `--port` if your local Jeff server is
-listening on a different localhost port.
+then select the generic local System One provider with `--provider jeff`.
+The provider calls `http://localhost:8765/v1/systemone`, defaults to
+`jeff-latest`, and does not require credentials unless the server has
+authentication enabled. Set `JEFF_API_KEY` when it does. Pass `--port` if the
+local System One server is listening on a different localhost port.
+
+The `d1` and `clef` providers use the same endpoint and protocol while supplying
+the corresponding LM Studio model identifier by default:
+
+| Provider | Default model |
+| --- | --- |
+| `d1` | `LiquidAI/d1-3B-GGUF/d1-3B-Q4_K_M.gguf` |
+| `clef` | `bartowski/Cloudflare_clef-GGUF/Cloudflare_clef-Q4_K_S.gguf` |
+
+Use `--model` to override these defaults, and use `--port 1234` when addressing
+an LM Studio API server on its conventional port.
 
 ```shell
 python3 jevq.py --provider jeff -p -q "Does this ask for a refund?" < message.txt
 python3 jevq.py --provider jeff --port 9876 -p -q "Does this ask for a refund?" < message.txt
-python3 jevq.py --provider d1 -p -q "Does this ask for a refund?" < message.txt
+python3 jevq.py --provider d1 --port 1234 -p -q "Does this ask for a refund?" < message.txt
+python3 jevq.py --provider clef --port 1234 -p -q "Does this ask for a refund?" < message.txt
 python3 jevq.py --provider jeff -c refunds,deliveries -m support-intents \
   -q "Which team should handle this?" < message.txt
 ```

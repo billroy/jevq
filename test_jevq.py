@@ -323,17 +323,43 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
         )
 
-    def test_d1_provider_is_jeff_synonym(self):
-        status, output, error, opener = self.run_main(
-            ["--provider", "d1", "-p", "-q", "Question?", "state"],
+    def test_local_model_providers_have_model_specific_defaults(self):
+        cases = (
+            ("d1", "LiquidAI/d1-3B-GGUF/d1-3B-Q4_K_M.gguf"),
+            (
+                "clef",
+                "bartowski/Cloudflare_clef-GGUF/Cloudflare_clef-Q4_K_S.gguf",
+            ),
+        )
+        for provider, expected_model in cases:
+            with self.subTest(provider=provider):
+                status, output, error, opener = self.run_main(
+                    ["--provider", provider, "-p", "-q", "Question?", "state"],
+                    response=noul_response(),
+                    environ={},
+                )
+                self.assertEqual((status, output, error), (0, "0.93\n", ""))
+                request, _ = opener.calls[0]
+                self.assertEqual(request.full_url, jevq.JEFF_PROVIDER.api_url)
+                self.assertIsNone(request.get_header("Authorization"))
+                self.assertEqual(json.loads(request.data)["model"], expected_model)
+
+    def test_local_model_provider_allows_model_override(self):
+        _, _, _, opener = self.run_main(
+            [
+                "--provider",
+                "clef",
+                "--model",
+                "custom-clef",
+                "-p",
+                "-q",
+                "Question?",
+                "state",
+            ],
             response=noul_response(),
             environ={},
         )
-        self.assertEqual((status, output, error), (0, "0.93\n", ""))
-        request, _ = opener.calls[0]
-        self.assertEqual(request.full_url, jevq.JEFF_PROVIDER.api_url)
-        self.assertIsNone(request.get_header("Authorization"))
-        self.assertEqual(json.loads(request.data)["model"], "jeff-latest")
+        self.assertEqual(json.loads(opener.calls[0][0].data)["model"], "custom-clef")
 
     def test_d1_provider_accepts_custom_port(self):
         status, output, error, opener = self.run_main(
@@ -346,13 +372,33 @@ class JevqTests(unittest.TestCase):
             opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
         )
 
-    def test_port_is_valid_only_for_jeff_provider(self):
+    def test_clef_provider_accepts_custom_port(self):
+        status, output, error, opener = self.run_main(
+            [
+                "--provider",
+                "clef",
+                "--port",
+                "9876",
+                "-p",
+                "-q",
+                "Question?",
+                "state",
+            ],
+            response=noul_response(),
+            environ={},
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        self.assertEqual(
+            opener.calls[0][0].full_url, "http://localhost:9876/v1/systemone"
+        )
+
+    def test_port_is_valid_only_for_local_systemone_providers(self):
         status, output, error, opener = self.run_main(
             ["--port", "9876", "-p", "-q", "Question?", "state"],
             response=noul_response(),
         )
         self.assertEqual((status, output), (2, ""))
-        self.assertIn("only with --provider jeff", error)
+        self.assertIn("only with --provider jeff, d1, or clef", error)
         self.assertEqual(opener.calls, [])
 
     def test_port_must_be_valid_tcp_port(self):

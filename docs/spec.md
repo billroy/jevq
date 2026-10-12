@@ -28,7 +28,8 @@ Use the decision API selected by `--provider`:
 | `typesafe` | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `vercel` | `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY`, then `VERCEL_OIDC_TOKEN` |
 | `jeff` | `POST http://localhost:8765/v1/systemone` | `jeff-latest` | optional `JEFF_API_KEY` |
-| `d1` | Exact synonym for `jeff` | `jeff-latest` | optional `JEFF_API_KEY` |
+| `d1` | `POST http://localhost:8765/v1/systemone` | `LiquidAI/d1-3B-GGUF/d1-3B-Q4_K_M.gguf` | optional `JEFF_API_KEY` |
+| `clef` | `POST http://localhost:8765/v1/systemone` | `bartowski/Cloudflare_clef-GGUF/Cloudflare_clef-Q4_K_S.gguf` | optional `JEFF_API_KEY` |
 | `chatgpt` | `POST https://api.openai.com/v1/decisions` | `gpt-6-luna` | `OPENAI_API_KEY` |
 | `openai` | Exact synonym for `chatgpt` | `gpt-6-luna` | `OPENAI_API_KEY` |
 
@@ -82,7 +83,7 @@ complete mapping is documented in
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,chatgpt,openai,d1}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,d1,clef,chatgpt,openai}] [-m MODEL] [-j] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -103,7 +104,7 @@ Exactly one mode is required:
 | Argument | Required | Meaning |
 | --- | --- | --- |
 | `-q QUESTION`, `--question QUESTION` | yes | Instructions sent with the typed question |
-| `--provider {typesafe,vercel,jeff,chatgpt,openai,d1}` | no | API provider; `openai` is an exact synonym for `chatgpt`; `d1` is an exact synonym for `jeff`; defaults to `typesafe` |
+| `--provider {typesafe,vercel,jeff,d1,clef,chatgpt,openai}` | no | API provider; `openai` is an exact synonym for `chatgpt`; `d1` and `clef` select model-specific defaults on the local System One endpoint; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
@@ -119,9 +120,9 @@ Choice mode is selected with `-c CHOICE[,CHOICE...]` or its long form, `--choice
 - Reject empty items and duplicate items after trimming.
 - Require at least two choices.
 - Reject carriage returns, line feeds, and other ASCII control characters in choice names so plain-text output remains one result per line.
-- With the `jeff` provider, reject number-like choice keys because JavaScript
+- With a local System One provider (`jeff`, `d1`, or `clef`), reject number-like choice keys because JavaScript
   reorders them and can silently change option order.
-- Jeff's current v1.2 models accept at most 254 choices per question.
+- Local System One models accept at most 254 choices per question.
 - Commas inside choice names and per-choice descriptions are not supported in this version.
 
 Example:
@@ -137,7 +138,7 @@ The TypeSafe API requires score criteria, so score mode requires `--criteria LEV
 - Split and validate it using the same rules as `--choices`.
 - Preserve its order; the first item is score 0, the second is score 1, and so on.
 - Require at least two levels at the CLI even though the current API schema permits one; a one-level scale cannot express a meaningful rating.
-- With the `jeff` provider, allow at most 10 levels.
+- With a local System One provider, allow at most 10 levels.
 - `--criteria` is invalid outside score mode.
 
 Example:
@@ -169,9 +170,9 @@ printf '%s' 'Please refund my order' | jevq -n -q "Does this ask for a refund?"
 
 The selected provider must have any required non-blank credential. TypeSafe
 reads `TYPESAFE_API_KEY`. Vercel reads `AI_GATEWAY_API_KEY` first and falls back
-to `VERCEL_OIDC_TOKEN`. Jeff optionally reads `JEFF_API_KEY`; no Authorization
-header is sent when it is absent. ChatGPT and its `openai` synonym read
-`OPENAI_API_KEY`. A missing or blank required credential is a configuration
+to `VERCEL_OIDC_TOKEN`. The local System One providers optionally read
+`JEFF_API_KEY`; no Authorization header is sent when it is absent. ChatGPT and
+its `openai` synonym read `OPENAI_API_KEY`. A missing or blank required credential is a configuration
 error detected before any network request. Credentials must never appear in
 output, error details, tracebacks, or logs.
 
