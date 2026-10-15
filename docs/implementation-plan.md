@@ -54,10 +54,11 @@ Planned functions and responsibilities:
 | `make_parser()` | Define modes and arguments with `argparse`; override parser error handling so it never writes uncontrolled diagnostics. |
 | `parse_cli(argv)` | Parse arguments and enforce cross-option rules such as the choice list consumed by `-c`/`--choices` and score-specific `--criteria`. |
 | `parse_labels(value, option_name)` | Split, trim, and validate choices or score criteria while preserving order. |
-| `read_state(text_parts, stdin)` | Apply positional-over-stdin precedence without accidentally blocking on a terminal. |
+| `read_state(text_parts, stdin, has_images=...)` | Apply positional-over-stdin precedence without accidentally blocking on a terminal, while allowing image-only state. |
+| `prepare_images(paths)` / `compose_state(text, images)` | Validate image inputs, assign opaque references, and build stable `image1`/`image2` structured state. |
 | `load_api_key(environ, provider)` | Resolve the selected provider's credential variables without exposing their values. |
-| `build_payload(config, state)` | Produce the selected provider's exact request document, including ChatGPT's incompatible `input` and array-based question schema. |
-| `call_api(payload, api_key, opener, provider=...)` | Serialize UTF-8 JSON, POST to the selected provider with a 30-second timeout, and translate transport/HTTP failures. |
+| `build_payload(config, state, images)` | Produce the selected provider's exact request document, including TypeSafe assets and ChatGPT's incompatible `input` and array-based question schema. |
+| `call_api(payload, api_key, opener, provider=..., images=..., long_context=...)` | Serialize UTF-8 JSON or multipart, add opt-in headers, POST with a 30-second timeout, and translate transport/HTTP failures. |
 | `extract_answer(document, mode, labels)` | Dispatch to the provider wire codec, validate the response envelope and typed answer, then normalize it to the Jev CLI result. |
 | `write_success(answer, mode, json_mode, stdout)` | Emit either the bare result or the documented compact JSON object. |
 | `write_error(error, json_mode, stderr)` | Emit one sanitized plain-text or JSON diagnostic. |
@@ -69,7 +70,7 @@ Use a small internal exception or immutable error value carrying `code`, `messag
 
 ## 3. CLI validation design
 
-Use one required mutually exclusive group for `-c`/`--choices`, `-p`/`--probability`, `-n`/`--noul`, and `-s`/`--score`. The choice option consumes its comma-separated list directly. Both noul aliases set the same internal mode, while the group rejects supplying both aliases.
+Use one required mutually exclusive group for `-c`/`--choices`, `-p`/`--probability`, `-n`/`--noul`, `-s`/`--score`, and `-b`/`--box`. The choice option consumes its comma-separated list directly. Both noul aliases set the same internal mode, while the group rejects supplying both aliases.
 
 After parsing:
 
@@ -77,8 +78,9 @@ After parsing:
 2. in choice mode, validate the list consumed by `-c`/`--choices` and reject `--criteria`;
 3. in score mode, require `--criteria`;
 4. in noul mode, reject `--criteria`;
-5. validate label cardinality, duplicates, empty items, and ASCII control characters; and
-6. obtain non-blank state from positional text or non-interactive stdin.
+5. in Box mode, require at least one image and a compatible provider/model;
+6. validate label cardinality, duplicates, empty items, and ASCII control characters; and
+7. obtain non-blank text state or at least one image.
 
 Positional text beginning with `-` can be supplied after the conventional `--` separator; no additional parsing convention is needed.
 
@@ -203,3 +205,21 @@ Implementation is ready for review when:
 ## 9. Planning blockers
 
 None. The remaining packaging and post-testing reliability choices are explicitly deferred and do not affect the first implementation slice.
+
+## 10. Jev 1.14 extension
+
+The 1.14 implementation preserves the text-only path and adds three
+direct-TypeSafe capabilities:
+
+1. Repeatable `-i`/`--image` inputs are validated as PNG/JPEG files, assigned
+   opaque references, exposed as `image1`, `image2`, and so on, and sent in a
+   multipart body with the image danger-zone header.
+2. `-b`/`--box` builds a Box question, defaults to pinned `jev-1.14.0`, and
+   validates normalized, ordered edges plus confidence before rendering.
+3. `--long-context` adds only the documented long-context header; the client
+   does not estimate tokens or opt users in automatically.
+
+Provider capability flags reject unsupported transports before file I/O.
+Multipart tests use temporary image fixtures and inspect the generated request;
+the default suite remains fully offline. The announcement's feedback opt-in
+has no documented request field, so the client does not invent one.

@@ -10,13 +10,14 @@ Gateway, or call a local Jeff server.
 
 The implementation lives in `jevq.py`, and invoking `python3 jevq.py ...` must work. Examples use `jevq` as the intended installed command name; the installation mechanism is deferred until after initial testing.
 
-This version supports exactly one question per invocation and one of Jev's three question types:
+This version supports exactly one question per invocation and one of Jev's four question types:
 
 - **choice**: select one member of a caller-supplied finite set;
 - **noul**: estimate the probability that a yes/no proposition is true; or
-- **score**: rate the state against an ordered, caller-supplied rubric.
+- **score**: rate the state against an ordered, caller-supplied rubric; or
+- **box**: find one target in an image and return its normalized bounding box.
 
-Batching multiple questions in one API call, structured (non-string) state,
+Batching multiple questions in one API call, caller-supplied arbitrary structured state,
 arbitrary/custom providers, and local caching are out of scope.
 
 ## 2. External API contract
@@ -61,6 +62,7 @@ The System One question object changes by mode:
 | choice | `choice` | `criteria`: an object whose keys are option names |
 | probability | `noul` | none |
 | score | `score` | `criteria`: an ordered array of rubric levels, where the first level is score 0 |
+| box | `box` | none; requires at least one image and Jev 1.14 |
 
 For choice mode, a bare CLI choice label is sent with a JSON `null` description. For example, `--choices Heaven,Hell` becomes `"criteria": {"Heaven": null, "Hell": null}`. Choice order must be preserved in the serialized request even though semantic selection does not depend on it.
 
@@ -80,10 +82,39 @@ gratuitously renames and reshapes most of the System One wire protocol. The
 complete mapping is documented in
 [chatgpt-protocol-diff.md](chatgpt-protocol-diff.md).
 
+### 2.1 Jev 1.14 experimental request contract
+
+The direct TypeSafe provider supports images, Box, and long context. The
+Vercel, ChatGPT, and local provider profiles reject these options until their
+corresponding wire contracts are verified.
+
+An invocation with one or more images uses `multipart/form-data`. The first
+part is named `request`, has content type `application/json`, and contains the
+System One document. Each image has a unique generated part name and is listed
+once in the top-level `assets` map:
+
+```json
+{
+  "model": "jev-latest",
+  "state": {"text": "optional text", "image1": "opaque-reference"},
+  "assets": {
+    "opaque-reference": {"type": "image", "part": "jevq_image_1"}
+  },
+  "questions": {
+    "question": {"type": "noul", "instructions": "Is `image1` a receipt?"}
+  }
+}
+```
+
+Multipart uploads use generic filenames rather than local filenames. Image
+requests send `TypeSafe-Danger-Zone-Images: true`. `--long-context` sends
+`TypeSafe-Danger-Zone-Long-Context: true`; the headers compose. Text-only
+requests remain UTF-8 `application/json` with their existing string state.
+
 ## 3. Command-line interface
 
 ```text
-usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s) -q QUESTION [--provider {typesafe,vercel,jeff,d1,clef,chatgpt,openai}] [-m MODEL] [-j] [mode options] [TEXT ...]
+usage: jevq (-c CHOICE[,CHOICE...] | -p | -n | -s | -b) -q QUESTION [--provider {typesafe,vercel,jeff,d1,clef,chatgpt,openai}] [-m MODEL] [-j] [-i FILE ...] [--long-context] [mode options] [TEXT ...]
 ```
 
 ### 3.1 Modes
@@ -96,6 +127,7 @@ Exactly one mode is required:
 | `-p` | `--probability` | Noul question |
 | `-n` | `--noul` | Exact synonym for `--probability` |
 | `-s` | `--score` | Score question |
+| `-b` | `--box` | Experimental Box question; requires an image |
 
 `-p` and `-n` select the same mode; using both is invalid because the mode group is mutually exclusive.
 
@@ -107,6 +139,8 @@ Exactly one mode is required:
 | `--provider {typesafe,vercel,jeff,d1,clef,chatgpt,openai}` | no | API provider; `openai` is an exact synonym for `chatgpt`; `d1` and `clef` select model-specific defaults on the local System One endpoint; defaults to `typesafe` |
 | `-m MODEL`, `--model MODEL` | no | Model name or alias; defaults according to the provider |
 | `-j`, `--json` | no | Emit machine-readable JSON for both success and error output |
+| `-i FILE`, `--image FILE` | no | Add a PNG or JPEG to state; repeatable and direct-TypeSafe-only |
+| `--long-context` | no | Opt in to TypeSafe's experimental 262k context |
 | `TEXT ...` | conditionally | Positional words joined with one ASCII space to form the state |
 
 `QUESTION`, `MODEL`, and the resulting state must each contain at least one non-whitespace character. The model value is passed through unchanged; the API remains authoritative about which model names the authenticated account may use.
@@ -157,6 +191,17 @@ The state comes from exactly one of these sources:
 
 Preserve stdin content exactly, including internal and trailing newlines. Reject an input that is empty or whitespace-only. Do not impose a client-side size limit unless TypeSafe publishes a stable limit; surface the API's validation error if the request is too large.
 
+An image satisfies the state requirement. If there are images and no
+non-blank text, do not require or block on interactive stdin. With images,
+construct an object whose optional `text` field holds text state and whose
+`image1`, `image2`, and subsequent fields hold opaque per-request asset
+references in command-line order. Questions can refer to these fields by name.
+
+Image files must be readable regular files with a `.png`, `.jpg`, or `.jpeg`
+suffix and a matching PNG/JPEG signature. Reject a file over 16 MiB locally.
+TypeSafe remains authoritative for decoding and its dimensional, total-pixel,
+body, expanded-request, and context limits.
+
 This precedence makes accidental blocking impossible and makes a positional argument deterministic when stdin is inherited or redirected. Supplying both positional text and redirected stdin is accepted, but the redirected data is ignored.
 
 Examples:
@@ -195,6 +240,7 @@ Without `-j`/`--json`, print the barest useful result:
 | choice | selected choice string | `Heaven` |
 | noul / probability | decimal probability from 0 to 1 | `0.93` |
 | score | decimal score | `1.7` |
+| box | compact coordinate object | `{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84}` |
 
 Numbers must use Python's normal JSON-compatible decimal representation and must not be rounded or converted to a percentage. A choice is printed verbatim, even if it contains whitespace.
 
@@ -220,7 +266,20 @@ With `-j`/`--json`, write one compact JSON object:
 {"score":1.7}
 ```
 
+**Box**
+
+```json
+{"box":{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84},"confidence":0.92}
+```
+
 Choice output copies `choice`, `probabilities`, and `confidence` from the API answer. Noul output copies only `noul`. Score output copies only `score`. Do not round numeric values or substitute percentages from 0 to 100: the API's `noul` is a probability from 0 to 1.
+
+Box output validates exactly the `top`, `bottom`, `left`, and `right` edges as
+finite numbers in `[0, 1]`, requires `left < right` and `top < bottom`, and
+validates confidence in `[0, 1]`. Without `--json`, output only the compact box
+object. Box defaults to pinned `jev-1.14.0` when `--model` is omitted. Reject an
+explicit `jev-1.13.0`; preserve other explicit model values for server-side
+validation.
 
 ## 7. Errors and exit status
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 import socket
+import tempfile
 import unittest
 import urllib.error
 
@@ -86,6 +88,18 @@ def score_response(value=1.7):
     }
 
 
+def box_response():
+    return {
+        "answers": {
+            "question": {
+                "type": "box",
+                "box": {"top": 0.25, "bottom": 0.82, "left": 0.44, "right": 0.84},
+                "confidence": 0.92,
+            }
+        }
+    }
+
+
 def chatgpt_predicate_response(value=0.93):
     return {
         "answers": [
@@ -134,6 +148,28 @@ def chatgpt_score_response(value=1.7):
 
 
 class JevqTests(unittest.TestCase):
+    def make_image(self, suffix=".png", data=None):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / f"private-name{suffix}"
+        if data is None:
+            data = (
+                b"\x89PNG\r\n\x1a\nminimal-test-data"
+                if suffix.lower() == ".png"
+                else b"\xff\xd8\xffminimal-test-data"
+            )
+        path.write_bytes(data)
+        return str(path)
+
+    def multipart_payload(self, request):
+        content_type = request.get_header("Content-type")
+        self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
+        boundary = content_type.split("boundary=", 1)[1].encode("ascii")
+        request_part = request.data.split(b'form-data; name="request"', 1)[1]
+        document = request_part.split(b"\r\n\r\n", 1)[1]
+        document = document.split(b"\r\n--" + boundary, 1)[0]
+        return json.loads(document.decode("utf-8"))
+
     def run_main(
         self,
         args,
@@ -203,6 +239,190 @@ class JevqTests(unittest.TestCase):
                 payload = json.loads(opener.calls[0][0].data)
                 self.assertEqual(payload["state"], "Please refund this.\n")
                 self.assertEqual(payload["questions"]["question"]["type"], "noul")
+
+    def test_image_only_request_uses_multipart_and_structured_state(self):
+        image_path = self.make_image()
+        status, output, error, opener = self.run_main(
+            ["-n", "-i", image_path, "-q", "Is `image1` red?"],
+            response=noul_response(),
+            terminal=True,
+            fail_read=True,
+        )
+        self.assertEqual((status, output, error), (0, "0.93\n", ""))
+        request, timeout = opener.calls[0]
+        payload = self.multipart_payload(request)
+        self.assertEqual(timeout, jevq.REQUEST_TIMEOUT_SECONDS)
+        self.assertEqual(request.get_header("Typesafe-danger-zone-images"), "true")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        self.assertEqual(set(payload["state"]), {"image1"})
+        reference = payload["state"]["image1"]
+        self.assertEqual(
+            payload["assets"][reference],
+            {"type": "image", "part": "jevq_image_1"},
+        )
+        self.assertIn(b'name="jevq_image_1"; filename="image1.png"', request.data)
+        self.assertIn(b"Content-Type: image/png", request.data)
+        self.assertIn(b"minimal-test-data", request.data)
+        self.assertNotIn(b"private-name", request.data)
+
+    def test_images_text_and_long_context_compose(self):
+        first = self.make_image(".jpg")
+        second = self.make_image(".png")
+        status, _, error, opener = self.run_main(
+            [
+                "-c",
+                "same,different",
+                "-i",
+                first,
+                "--image",
+                second,
+                "--long-context",
+                "-q",
+                "Compare `image1` and `image2`.",
+                "inspection",
+                "photos",
+            ],
+            response={
+                "answers": {
+                    "question": {
+                        "type": "choice",
+                        "choice": "same",
+                        "confidence": 0.8,
+                        "probabilities": {"same": 0.8, "different": 0.2},
+                    }
+                }
+            },
+            fail_read=True,
+        )
+        self.assertEqual((status, error), (0, ""))
+        request = opener.calls[0][0]
+        payload = self.multipart_payload(request)
+        self.assertEqual(request.get_header("Typesafe-danger-zone-images"), "true")
+        self.assertEqual(
+            request.get_header("Typesafe-danger-zone-long-context"), "true"
+        )
+        self.assertEqual(payload["state"]["text"], "inspection photos")
+        self.assertEqual(set(payload["state"]), {"text", "image1", "image2"})
+        self.assertEqual(len(payload["assets"]), 2)
+
+    def test_box_request_default_model_and_outputs(self):
+        image_path = self.make_image()
+        args = ["-b", "-i", image_path, "-q", "the mug in `image1`"]
+        status, output, error, opener = self.run_main(
+            args, response=box_response(), terminal=True
+        )
+        self.assertEqual(
+            (status, output, error),
+            (0, '{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84}\n', ""),
+        )
+        payload = self.multipart_payload(opener.calls[0][0])
+        self.assertEqual(payload["model"], "jev-1.14.0")
+        self.assertEqual(
+            payload["questions"]["question"],
+            {"type": "box", "instructions": "the mug in `image1`"},
+        )
+
+        status, output, error, _ = self.run_main(
+            [*args, "-j"], response=box_response(), terminal=True
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(error, "")
+        self.assertEqual(
+            json.loads(output),
+            {
+                "box": {
+                    "top": 0.25,
+                    "bottom": 0.82,
+                    "left": 0.44,
+                    "right": 0.84,
+                },
+                "confidence": 0.92,
+            },
+        )
+
+    def test_box_response_validation(self):
+        invalid_boxes = (
+            {"top": 0.25, "bottom": 0.82, "left": 0.44},
+            {"top": True, "bottom": 0.82, "left": 0.44, "right": 0.84},
+            {"top": 0.25, "bottom": 0.82, "left": 0.84, "right": 0.44},
+            {"top": 0.82, "bottom": 0.82, "left": 0.44, "right": 0.84},
+            {"top": 0.25, "bottom": 1.2, "left": 0.44, "right": 0.84},
+        )
+        for box in invalid_boxes:
+            with self.subTest(box=box):
+                response = box_response()
+                response["answers"]["question"]["box"] = box
+                with self.assertRaises(jevq.JevqError) as raised:
+                    jevq.extract_answer(response, "box", ())
+                self.assertEqual(raised.exception.code, "response_error")
+
+        response = box_response()
+        response["answers"]["question"]["confidence"] = False
+        with self.assertRaises(jevq.JevqError):
+            jevq.extract_answer(response, "box", ())
+
+    def test_experimental_features_reject_unsupported_providers(self):
+        cases = (
+            (["--provider", "vercel", "-n", "-i", "/missing.png"], "--image"),
+            (["--provider", "chatgpt", "-b", "-i", "/missing.png"], "--image"),
+            (["--provider", "jeff", "-n", "--long-context"], "--long-context"),
+        )
+        for prefix, fragment in cases:
+            with self.subTest(prefix=prefix):
+                status, output, error, opener = self.run_main(
+                    [*prefix, "-q", "Q", "state"], environ={}
+                )
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn(fragment, error)
+                self.assertEqual(opener.calls, [])
+
+    def test_box_usage_validation(self):
+        cases = (
+            (["-b", "-q", "Q"], "requires --image"),
+            (["-b", "-i", "missing.png", "-m", "jev-1.13.0", "-q", "Q"], "1.14"),
+        )
+        for args, fragment in cases:
+            with self.subTest(args=args):
+                status, output, error, opener = self.run_main(args, terminal=True)
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn(fragment, error)
+                self.assertEqual(opener.calls, [])
+
+    def test_image_file_validation(self):
+        bad_signature = self.make_image(data=b"not-a-png")
+        unsupported = self.make_image(".gif", b"GIF89a")
+        directory = tempfile.TemporaryDirectory(suffix=".png")
+        self.addCleanup(directory.cleanup)
+        oversized = self.make_image()
+        with open(oversized, "r+b") as image_file:
+            image_file.truncate(jevq.MAX_IMAGE_BYTES + 1)
+        cases = (
+            ("missing.png", "cannot be read"),
+            (unsupported, "PNG or JPEG"),
+            (bad_signature, "contents do not match"),
+            (directory.name, "regular file"),
+            (oversized, "16 MiB"),
+        )
+        for path, fragment in cases:
+            with self.subTest(path=path):
+                status, output, error, opener = self.run_main(
+                    ["-n", "-i", path, "-q", "Q"], terminal=True
+                )
+                self.assertEqual((status, output), (2, ""))
+                self.assertIn(fragment, error)
+                self.assertEqual(opener.calls, [])
+
+    def test_long_context_keeps_json_transport(self):
+        status, _, error, opener = self.run_main(
+            ["-n", "--long-context", "-q", "Q", "state"]
+        )
+        self.assertEqual((status, error), (0, ""))
+        request = opener.calls[0][0]
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        self.assertEqual(
+            request.get_header("Typesafe-danger-zone-long-context"), "true"
+        )
+        self.assertIsNone(request.get_header("Typesafe-danger-zone-images"))
 
     def test_score_plain_and_json_outputs(self):
         base = ["-s", "--criteria", "calm,annoyed,hostile", "-q", "Hostility?", "message"]

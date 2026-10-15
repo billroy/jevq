@@ -1,8 +1,9 @@
 # jevq
 
-`jevq` asks one Choice, Noul, or Score question using Jev's TypeSafe-compatible
-System One API. It supports TypeSafe directly, Vercel AI Gateway, a local Jeff
-server, and ChatGPT's Decisions API through a compatibility adapter.
+`jevq` asks one Choice, Noul, Score, or experimental Box question using Jev's
+TypeSafe-compatible System One API. It supports TypeSafe directly, Vercel AI
+Gateway, a local Jeff server, and ChatGPT's Decisions API through a
+compatibility adapter.
 
 It requires Python 3.10 or newer and uses only the Python standard library.
 TypeSafe is the default provider and reads `TYPESAFE_API_KEY`.
@@ -16,6 +17,55 @@ python3 jevq.py -s --criteria calm,annoyed,hostile -q "What is the user's hostil
 Output is the selected choice, probability, or score as plain text. Pass `-j`
 or `--json` for JSON success and error output, and `-m` or `--model` to
 override the selected provider's default model.
+
+## Jev 1.14 and experimental features
+
+Jev 1.14 is available as `jev-preview` and `jev-1.14.0`. Ordinary Choice,
+Noul, and Score calls need no compatibility option:
+
+```shell
+python3 jevq.py -n -m jev-preview -q "Does this ask for a refund?" < message.txt
+```
+
+The direct TypeSafe provider also supports the experimental image, Box, and
+long-context features announced with Jev 1.14. These features are not enabled
+for Vercel, ChatGPT, or local providers until those transports document the
+same contracts.
+
+Add images with repeatable `-i` or `--image` options. Images become `image1`,
+`image2`, and so on in structured state; optional text becomes `text`:
+
+```shell
+python3 jevq.py -n -i receipt.jpg \
+  -q 'Does `image1` show a total over $100?'
+
+python3 jevq.py -c same,different -i before.jpg -i after.jpg \
+  -q 'Are `image1` and `image2` the same product?' inspection photos
+```
+
+Image calls use TypeSafe's recommended multipart upload and automatically send
+`TypeSafe-Danger-Zone-Images: true`. Jevq accepts PNG and JPEG files up to
+16 MiB. TypeSafe additionally requires each dimension to be 256–1568 pixels,
+total area to be 78,400–2,458,624 pixels, and the request and expanded assets
+to fit within 32 MiB. Rotate EXIF-oriented photos and resize them before use;
+the API does not do either operation.
+
+Use `-b` or `--box` to find one target. Box defaults to pinned `jev-1.14.0`
+when no model is supplied:
+
+```shell
+python3 jevq.py -b -i kitchen.jpg -q 'the coffee mug in `image1`'
+```
+
+Default Box output is its compact coordinate object. `--json` also includes
+confidence. Coordinates are fractions of image width and height measured from
+the top-left. Box always returns a box even if the target is absent; where
+absence matters, verify presence separately with a Noul question.
+
+Pass `--long-context` to send
+`TypeSafe-Danger-Zone-Long-Context: true`, raising both the request and
+per-question limits to 262k tokens. TypeSafe warns that this is slower and less
+accurate, so jevq never enables it automatically.
 
 ## Vercel AI Gateway
 
